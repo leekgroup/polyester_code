@@ -12,10 +12,7 @@ canonical_chr = c("chr1", "chr2", "chr3",
     "chr19", "chr20", "chr21",
     "chr22", "chrX", "chrY")
 
-genes = gffRead("/amber2/scratch/jleek/iGenomes-index/Homo_sapiens/UCSC/hg19/Annotation/Genes/genes.gtf")
+genes = gffRead("Homo_sapiens/UCSC/hg19/Annotation/Genes/genes.gtf")
 genes = subset(genes, seqname %in% canonical_chr)
-write.table(genes, 
-    file="/amber2/scratch/jleek/iGenomes-index/Homo_sapiens/UCSC/hg19/Annotation/Genes/genes_clean.gtf",
-    row.names=FALSE, col.names=FALSE,
-    quote=FALSE,
-    sep="\t")
+write.table(genes, file="genes_clean.gtf", row.names=FALSE, col.names=FALSE,
+    quote=FALSE, sep="\t")
