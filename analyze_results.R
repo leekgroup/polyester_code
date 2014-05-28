@@ -1,7 +1,6 @@
 ## polyester analysis for paper -- analyze the simulation
 ## run simulate_reads.R + preprocessing shell scripts first.
 
-setwd('/home/bst/student/afrazee/polyester_paper/')
 library(ballgown)
 library(Biostrings)
 
