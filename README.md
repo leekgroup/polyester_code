@@ -15,7 +15,7 @@ biocLite('Biostrings')
 * Annotation files: I downloaded my gene annotation [here](http://tophat.cbcb.umd.edu/igenomes.shtml) (hg19 build). The `ANNOTATIONPATH` environment variable in the shell scripts should point to the directory containing the `Homo_sapiens` folder included with this download. I cleaned up the `genes.gtf` file included with this download using the `clean_gtf.R` script -- this just subsets the gtf file to only chromosomes 1-22, X, and Y. The result was `genes_clean.gtf`, which you can download [here](https://drive.google.com/file/d/0B2HiqINPidEUelF3MkdxMXNNYlE/edit?usp=sharing). 
 * Shell scripts use the SGE scheduling system (specifically the `qsub` command to submit batch jobs) and call our cluster's `module` command to configure the `PATH`. The portability of these scripts to other computing systems leaves something to be desired -- they will likely need heavy editing to run on other systems.
 
-To use this code:
+To use this code:  
 1. run `simulate_reads.R` (change working directory as needed)
 2. run `sh tophat.sh` and wait for all TopHat jobs to finish. Change `ANNOTATIONPATH` and `FOLDERNAME` (`FOLDERNAME` should be the working directory from (1)). Also note that a transcriptome index was pre-built for TopHat using [this shell script and dummy fasta files](https://github.com/alyssafrazee/ballgown_code/tree/master/simulations/tophat_transcriptome).
 3. run `sh cufflinks.sh` and wait for all Cufflinks jobs to finish. Change `ANNOTATIONPATH` and `FOLDERNAME` (same as in (2)), `CUFFLINKS` (to point to your Cufflinks binary), and `GTF` (to point to `genes_clean.gtf`)
