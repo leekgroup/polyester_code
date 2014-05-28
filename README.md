@@ -20,22 +20,22 @@ To use this code:
   2. run `sh tophat.sh` and wait for all TopHat jobs to finish. Change `ANNOTATIONPATH` and `FOLDERNAME` (`FOLDERNAME` should be the working directory from (1)). Also note that a transcriptome index was pre-built for TopHat using [this shell script and dummy fasta files](https://github.com/alyssafrazee/ballgown_code/tree/master/simulations/tophat_transcriptome).  
   3. run `sh cufflinks.sh` and wait for all Cufflinks jobs to finish. Change `ANNOTATIONPATH` and `FOLDERNAME` (same as in (2)), `CUFFLINKS` (to point to your Cufflinks binary), and `GTF` (to point to `genes_clean.gtf`)  
   4. run `qsub cuffmerge.sh` and wait for the merge to finish. Change `ANNOTATIONPATH`, and `FOLDERNAME` (as in (2) and (3)), and change `CUFFMERGE` to point to your Cuffmerge binary. You should also create an `assemblies.txt` file in the `assemblies` folder (that was generated in (3)), which should look like:
-    ```
-    $FOLDERNAME/assemblies/sample_01_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_02_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_03_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_04_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_05_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_06_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_07_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_08_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_09_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_10_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_11_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_12_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_13_transcripts.gtf
-    $FOLDERNAME/assemblies/sample_14_transcripts.gtf
-    ```
+        ```
+        $FOLDERNAME/assemblies/sample_01_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_02_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_03_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_04_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_05_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_06_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_07_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_08_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_09_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_10_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_11_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_12_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_13_transcripts.gtf
+        $FOLDERNAME/assemblies/sample_14_transcripts.gtf
+        ```
     (but replace $FOLDERNAME with the actual value of `FOLDERNAME`).  
   5. run `sh tablemaker.sh`. Change `TABLEMAKER` to point to the tablemaker binary, and change `FOLDERNAME` (as in (2)-(4)).  
   6. run `analyze_results.R` (produces Figure 1. Change working directory as needed).   
