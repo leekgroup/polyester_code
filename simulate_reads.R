@@ -6,7 +6,7 @@ library(polyester)
 library(Biostrings)
 library(ballgown)
 
-fastapath = system.file("data", "chr22.fa", package="polyester")
+fastapath = system.file("extdata", "chr22.fa", package="polyester")
 fasta = readDNAStringSet(fastapath)
 
 # neaten up transcript names:
