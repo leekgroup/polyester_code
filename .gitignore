@@ -22,7 +22,8 @@ ten_genes_experiment/*.zip
 de_experiment/reads/*
 de_experiment/alignments/*
 figure/*
-*.rda
+fpkm.rda
+cov.rda
 GCbias.R
 NA*/*.bam*
 polyester_manuscript.md

@@ -1,0 +1,1010 @@
+---
+title: 'Polyester Manuscript: knit version'
+author: "Alyssa Frazee"
+date: "November 26, 2014"
+output: html_document
+---
+```{r options, echo=FALSE}
+options(digits=2)
+```
+
+# _Polyester_: simulating RNA-seq datasets with differential transcript expression
+Alyssa C Frazee, Andrew E Jaffe, Ben Langmead, Jeffrey T Leek
+
+## Requirements / About this document
+This document is a reproducible version of our submitted manuscript with the same title. Manuscript text is written in a regular font, and my notes on the code/data used for the analysis are written in _italics, starting now_. 
+
+_To knit this document, you will need to set up your working directory and R environment. You will need the following R packages_:
+
+_From CRAN_:
+* logspline
+
+_From Bioconductor_:
+* ballgown
+* polyester (devel version; BioC 3.1)
+* Biostrings
+* Rsamtools
+* GenomicAlignments
+* IRanges
+* limma
+
+_From GitHub_:
+* [RSkittleBrewer](https://github.com/alyssafrazee/RSkittleBrewer)
+* [usefulstuff](https://github.com/alyssafrazee/usefulstuff)
+
+_You will also need some R data files:_
+
+* fpkm.rda (downloadable from [figshare](http://files.figshare.com/1625419/fpkm.rda))
+* cov.rda (downloadable from [figshare](http://files.figshare.com/1625417/cov.rda))
+* sequences.rda (available in this repository; created by running `make_sequences.R` in this repo. You'll need [merged.gtf](https://www.dropbox.com/s/bajrp53kpa70kek/merged.gtf?dl=0), the GEUVADIS assembly, to run that code.)
+* countmat.rda (available in this repository; created with `make_countmat.R`)
+
+_The following supplementary data files are also required in the working directory:_
+* cdna\_pos\_bias.csv
+* rna\_pos\_bias.csv (both available in this repository; both created based on Supplementary Figure S3 of [this paper](http://www.ncbi.nlm.nih.gov/pubmed/23060617) using [WebPlotDigitizer]())
+* folders prefixed with `NA` (a sample ID), containing the following files:
+  * `<sample>_accepted_hits.bam`, downloadable from ArrayExpress: [NA06985](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA06985_accepted_hits.bam), [NA12144](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA12144_accepted_hits.bam), [NA12776](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA12776_accepted_hits.bam), [NA18858](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA18858_accepted_hits.bam), [NA20542](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20542_accepted_hits.bam), [NA20772](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20772_accepted_hits.bam), [NA20815](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20815_accepted_hits.bam). 
+  * `<sample>_accepted_hits.bam.bai`, created with the command `samtools index <sample>_accepted_hits.bam` ([samtools utility](http://samtools.sourceforge.net/))
+  * `<sample>_metrics`, created with `make_insert_sizes.sh` in the main directory
+  * `genes.fpkm_tracking`, `isoforms.fpkm_tracking`, `skipped.gtf`, and `transcripts.gtf`, created with the script `<sample>_estfpkm.sh` in the sample's specific subdirectory.
+* GD667.QGstats.masterfile.txt (downloadable from [here](https://github.com/alyssafrazee/ballgown_code/tree/master/GEUVADIS_preprocessing))
+* A folder called `error_models` containing the files `ill100v4_mate1`, `ill100v4_mate2`, `ill100v4_single`, `ill100v5_mate1`, `ill100v5_mate2`, and `ill100v5_single`
+* `genes.gtf`, available in the folder `Homo_sapiens/UCSC/hg19/Annotation/Genes` of [this annotation download](http://ccb.jhu.edu/software/tophat/igenomes.shtml)
+* Folders called `ten_genes_experiment` and `de_experiment` and all subdirectories/output included with those folders. The contents of those folders can be recreated with shell scripts included inside them.
+* Inside the subfolder `ten_genes_experiment`, the folders [alignments](https://www.dropbox.com/s/9ysq42v6izgr4k3/alignments.zip?dl=0) and [alignments_bias](https://www.dropbox.com/s/6mocmvwizlpyiij/alignments_bias.zip?dl=0), both unzipped. (The BAM files are too large to distribute via GitHub, so these are Dropbox links).
+
+_If you would like to reproduce some of these files that I've cached for you, you will need a few other files/tools:_
+* Python 2.7 
+* The [numpy](http://www.numpy.org/) Python package
+* The [GemSim](http://sourceforge.net/projects/gemsim/) package, unzipped in the working directory. Needed to create the error models from scratch by running `make_error_models.py`
+* [TopHat](http://ccb.jhu.edu/software/tophat/index.shtml) (version 2.0.13) and [Cufflinks](http://cufflinks.cbcb.umd.edu/) (version 2.2.1)
+* If you want to run the TopHat scripts as they are, you will need to pre-build a transcriptome index using [this code](https://github.com/alyssafrazee/ballgown_code/blob/master/simulations/tophat_transcriptome/make_txindex.sh) (set $ANNOTATIONPATH to point to the path that's the root of the `Homo_sapiens` directory)
+* [PicardTools](http://broadinstitute.github.io/picard/) (version 1.121), unzipped in the working directory. Needed to create the `_metrics` files by running `make_insert_sizes.sh`
+* The hg19 annotation package from [this page](http://ccb.jhu.edu/software/tophat/igenomes.shtml), unzipped in the working directory (the top-level folder should be `Homo_Sapiens`)
+
+```{r loadandlibs, message=FALSE, warning=FALSE}
+library(Biostrings)
+library(ballgown)
+library(polyester)
+library(Rsamtools)
+library(GenomicAlignments)
+library(usefulstuff)
+library(IRanges)
+library(logspline)
+library(RSkittleBrewer)
+library(limma)
+
+load('fpkm.rda') #transcript expression data. URL: http://files.figshare.com/1625419/fpkm.rda
+load('cov.rda') #transcript coverage data. URL: http://files.figshare.com/1625417/cov.rda
+load('sequences.rda') #transcript sequences
+load('countmat.rda') #gene counts for a few genes in GEUVADIS data set
+
+```
+
+## Abstract
+#### Motivation
+Statistical methods development for differential expression analysis of RNA sequencing (RNA-seq) requires software tools to assess accuracy and error rate control. Since true differential expression status is often unknown in experimental datasets, artificially-constructed datasets must be utilized, either by generating costly spike-in experiments or by simulating RNA-seq data.
+
+#### Results
+_Polyester_ is an R package designed to simulate RNA-seq data, beginning with an experimental design and ending with collections of RNA-seq reads. Its main advantage is the ability to simulate reads indicating isoform-level differential expression across biological replicates for a variety of experimental designs. Data generated by Polyester is a reasonable approximation to real RNA-seq data and standard differential expression workflows can recover differential expression set in the simulation by the user.
+
+#### Availability and Implementation
+_Polyester_ is freely available [on Bioconductor](http://www.bioconductor.org/packages/release/bioc/html/polyester.html). 
+
+#### Contact
+jtleek@gmail.com
+
+
+## 1. Introduction
+RNA sequencing (RNA-seq) experiments have become increasingly popular as a means to study gene expression. There are a range of statistical methods for differential expression analysis of RNA- seq data (Oshlack et al., 2010). The developers of statistical methodology for RNA-seq need to test whether their tools are performing correctly. Often, accuracy tests cannot be performed on real datasets because true gene expression levels and expression differences between populations are usually unknown, and spike-in experiments are costly in terms of both time and money.
+
+Instead, researchers often use computational simulations to create datasets with a known signal and noise structure. Typically, simulated expression measurements used to evaluate differential expression tools are generated as gene counts from a statistical model like those used in common differential expression tools (Robinson et al., 2010; Anders and Huber, 2010). But these simulated scenarios do not account for variability in expression measurements that arises during upstream steps in RNA-seq data analysis, such as read alignment or read counting. Polyester is a new R package for simulating RNA-seq reads. Polyester’s main advantage is that users can simulate sequencing reads with specified differential expression signal for either genes or isoforms. This allows users to investigate sources of variability at multiple points in RNA-seq pipelines.
+
+Existing RNA-seq simulators that generate sequencing reads are not designed for simulating experiments with biological replicates and specified differential expression signal. For example, the `rsem-simulate-reads` utility shipped with RSEM (Li and Dewey, 2011) requires a time-consuming first step of aligning real sequencing reads to develop a sequencing model before reads can be simulated, and differential expression simulation is not built- in. Neither FluxSimulator (Griebel et al., 2012) nor BEERS (Grant et al., 2011) have a built-in mechanism for introducing differential expression. These simulators also do not provide methods for defining a model for biological variability across replicates or specifying the exact expression level of specific transcripts. TuxSim has been used to simulate RNA-seq datasets with differential expression (Trapnell et al., 2013), but it is not publicly available.
+
+Polyester was created to fulfill the need for a tool to simulate RNA-seq reads for an experiment with replicates and well-defined differential expression. Users can easily simulate small experiments from a few genes or a single chromosome. This can reduce computational time in simulation studies when computationally intensive steps such as read alignment must be performed as part of the simulation. Polyester is open-source, cross-platform, and [freely available for download](https://github.com/alyssafrazee/polyester).
+
+## 2. Methods
+### 2.1 Input 
+Polyester takes annotated transcript nucleotide sequences as input. These can be provided as cDNA sequences in FASTA format, labeled by transcript. Alternatively, users can simulate  from a GTF file denoting exon, transcript, and gene structure paired with full-chromosome DNA sequences. The flexibility of this input makes it possible to design small, manageable simulations by simply passing Polyester a FASTA or GTF file consisting of feature sets of different sizes. Efficient functions for reading subsetting, and writing FASTA files are available in the _Biostrings_ package (Pages et al.). 
+
+### 2.2 RNA-seq data as basis for model parameters
+Several components of Polyester, described later in this section, require parameters estimated from RNA-seq data. To get these parameter estimates, we analyzed RNA-seq reads from 7 biological replicates in the public GEUVADIS RNA-seq data set (AC’t Hoen et al., 2013; Lappalainen et al., 2013). The 7 replicates were chosen by randomly selecting one replicate from each of the 7 laboratories that sequenced samples in the study. These replicates represented 7 people from three different HapMap populations: CEU (Utah residents with Northern and Western European ancestry), TSI (Tuscani living in Italy), and YRI (Yoruba living in Ibadan, Nigeria). Data from the GEUVADIS study is available from the [ArrayExpress database](www.ebi.ac.uk/arrayexpress) under accession numbers E-GEUV-1 through E-GEUV-6. We specifically used TopHat read alignments for these 7 replicates, under accession number E-GEUV-6. The reads were 75bp, paired-end reads.
+
+Also available for the GEUVADIS data set is a fully processed transcriptome assembly, created based on the RNA-seq reads from all 667 replicates in the GEUVADIS study without using a reference transcriptome. This assembly was built using Cufflinks and processed with the Ballgown R package (Frazee et al., 2014), and is available for direct download as an R object (Leek, 2014).
+
+### 2.3 Expression Models
+A key feature of Polyester is that the analyst has full control over the number of reads that are generated from each transcript in the input file, for each replicate in the experiment. Polyester ships with a built-in model for these read numbers, or the model can be explicitly specified by the end user.
+
+#### 2.3.1 Built-in negative binomial read count model
+The built-in transcript read count model assumes that the number of reads to simulate from each transcript is drawn from the negative binomial distribution, across biological replicates. The negative binomial model for read counts has been shown to satisfactorily capture biological and technical variability (Anders and Huber, 2010; Robinson et al., 2010). In Polyester, differential expression between experimental groups is defined by a multiplicative change in the mean of the negative binomial distribution generating the read counts.
+Specifically, define $Y_{ijk}$ as the number of reads simulated from replicate _i_, experimental condition _j_, and transcript _k_ (_i = 1_,...,$n_j$; _j=1_,...,_J_; and _k=1_,...,_N_; where $n_j$ is the number of replicates in condition _j_, _J_ is the total number of conditions, and _N_ is the total number of transcripts provided). The built-in model in Polyester assumes:
+
+$$Y_{ijk} \sim \text{Negative Binomial(mean} = \mu_{jk}, \text{size}=r_{jk})$$
+
+In this negative binomial parameterization, $E(Y_{ijk}) = \mu_{jk}$ and Var($Y_{ijk}) = \mu_{jk} + \frac{\mu_{jk}^2}{r_{jk}}$, so each transcript's expression variance across biological replicates is quadratically related to its baseline mean expression. The quantity $\frac{1}{r_{jk}}$ is commonly referred to as the dispersion dispersion parameter in this parameterization (Robinson et al., 2010; Lawless, 1987; Ismail and Jemain, 2007). The user can provide $\mu_{jk}$ for each transcript _k_ and experimental group _j_. In particular, the user can relate transcript _k_'s length to $\mu_{jk}$. Also, this flexible parameterization reduces to the Poisson distribution as $r_{jk} \rightarrow \infty$. Since the Poisson distribution is suitable for capturing read count variability across technical replicates (Bullard et al., 2010), users can create experiments with simulated technical replicates only by making all $r_{jk}$ very large. By default, $r_jk = \frac{\mu_jk}{3}$, which means Var$(Y_{ijk}) = 4\mu_{jk}$. The user can adjust $r_{jk}$ on a per-transcript basis as needed, to explore different mean/variance expression models.
+
+When $J = 2$, differential expression is set by providing a fold change $\lambda$ between the two conditions for each transcript. Initially, a baseline mean $\mu_k$ is provided for each transcript, and $\mu_{1k}$ and $\mu_{2k}$ are set to $\mu_k$. Then, if fold change $\lambda$ is provided, $\mu_{1k}$ and $\mu_{2k}$ are adjusted: if $\lambda > 1$, $\mu_{1k} = \lambda\mu_k$, and if $\lambda < 1$, $\mu_{2k} = \frac{1}{\lambda}\mu_k$. The number of reads to generate from each transcript is then drawn from the corresponding negative binomial distribution. When $J > 2$, the count for each transcript, $y_{ijk}$, is generated from a negative binomial distribution with overall mean $\mu_k$ and size $r_{jk}$. Differential expression can be set using a fold change matrix with _N_ rows and _J_ columns. Each count $y_{ijk}$ is multiplied by entry $k,j$ of the fold change matrix.
+
+#### 2.3.2 Options for adjusting read counts
+Users can optionally provide multiplicative library size factors for each replicate in their experiment, since the total number of reads (sequencing depth) is usually unequal across replicates in RNA-seq experiments (Mortazavi et al., 2008). All counts for a replicate will be multiplied by the library size factor. 
+
+GC (guanine-cytosine) content is known to affect expression measurements for genomic features, and the effect varies from sample to sample (Hansen et al., 2012; Risso et al., 2011; Benjamini and Speed, 2012). Polyester includes an option to model this GC bias in the simulated reads: for each biological replicate in the simulated data set, the user can choose one of 7 built-in GC content bias models, where one model was estimated from each of the 7 GEUVADIS replicates described in Section 2.2. We calculated these models using all transcripts from the available GEUVADIS transcriptome assembly (also described in Section 2.2).
+
+For each replicate, we first calculated transcript-level read counts based on transcript length, sequencing depth, and the observed FPKM for the transcript. By definition of FPKM, read counts can be directly calculated using these inputs. We then centered the transcript counts around the overall mean transcript count, and modeled the centered counts as a smooth function of the transcript GC content using a loess smoother with span 0.3, analgous to smoothers previously used for modeling GC content (Benjamini and Speed, 2012).
+
+Transcript GC content was calculated as the percentage of the annotated hg19 nucleotides falling in the boundaries of the assembled transcript that were G or C. The fitted loess curve defines a function that returns the average deviation from the overall mean transcript count for a transcript with a given GC content percentage. If there is no GC bias, the deviation would be 0. GC bias is added to replicates in Polyester after transcript-level counts have been specified by increasing or decreasing the count by the predicted deviation for that transcript’s GC content. The 7 loess curves included in Polyester are shown in Supplementary Figure 1. Users can also provide loess models from their own data as GC bias models if desired.
+
+```{r suppfigure1, warning=FALSE, message=FALSE, fig.height=12, fig.width=6}
+# calculate GC content:
+GC = letterFrequency(sequences, letters='GC', as.prob=TRUE)
+
+# filter to reasonable expression (FPKM > 1)
+expressed = exprfilter(fpkm, cutoff=1)
+
+# estimate transcript-level counts
+txcounts = fpkm_to_counts(expressed, mean_rps=1e7)
+
+# put counts in same order as sequence data
+txcounts = txcounts[match(names(sequences), texpr(expressed,'all')$t_name),]
+rownames(txcounts) = names(sequences)
+
+# use 7 GEUVADIS reps:
+samples = c("NA06985", "NA18858", "NA20772", "NA12144", "NA20815", "NA12776", "NA20542")
+cols_samples = ballgown:::ss(colnames(txcounts), pattern='\\.', slot=2)
+counts = txcounts[,cols_samples %in% samples]
+counts = counts[GC >= 0.25,] #remove 1-2 outliers driving loess
+GC = GC[GC >= 0.25]
+lcounts = log2(counts+1)
+
+# Supplementary Figure 1:
+par(mfrow=c(4,2))
+for(i in 1:7){
+    sample_id = ballgown:::ss(colnames(counts)[i], pattern='\\.', slot=2)
+    plot(GC, lcounts[,i] - mean(lcounts[,i]), col='#00000050', pch=19, 
+        ylab='Difference from average count (log scale)', xlab='GC %', 
+            main=paste0('Model ', i, ': Sample ', sample_id))
+    o = order(GC)
+    loessfit = loess(lcounts[,i] - mean(lcounts[,i]) ~ GC, span=0.3)
+    lines(GC[o], predict(loessfit)[o], col='deeppink', lwd=3)
+    legend('topright', lwd=2, col='deeppink', 'loess fit')
+}
+
+# This code saves the 7 loess models (deviation-wise) as data sets
+# These dataset ship with Polyester
+lcounts = log2(counts+1)
+for(s in samples){
+    system('mkdir -p data')
+    i = which(samples == s)
+    fit = loess(lcounts[,i]-mean(lcounts[,i]) ~ GC, span=0.3)
+    eval(parse(text=paste0('loessfit', i, ' <- fit')))
+    save(list=paste0('loessfit',i), file=paste0('data/', s, '_GC.rda'), compress='xz')
+}
+```
+
+```{r, echo=FALSE, message=FALSE, results='hide'}
+rm(expressed, txcounts, sequences, counts, lcounts)
+gc();gc();gc()
+```
+
+#### 2.3.3 User-defined count models
+As an alternative to the built-in negative binomial model, Polyester allows users to individually specify the number of reads to generate from each transcript, for each sample. This gives researchers the flexibility to design their own models for biological and technical variability, simulate complex experimental designs, such as timecourse experiments, and explore the effects of a wide variety of experimental parameters on differential expression results. This transcript-by-sample read count matrix can be created within R and input directly into Polyester’s read simulation function. This level of flexibility is not available with Flux Simulator or BEERS, which only allow specification of the total number of reads per replicate. While it is possible to write custom command-line scripts that induce differential expression using these simulators, differential expression models are built in to Polyester. This approach offers both a built-in model for convenience and an integrated way to define a custom model for flexibility.
+
+### 2.4 The RNA Sequencing Process
+#### 2.4.1 Fragmentation
+After the transcripts have been specified and each transcript's abundance in the simulated experiment has been determined by an assigned read count for each replicate, Polyester simulates the RNA sequencing process, described in detail in (Oshlack et al., 2010), beginning at the fragmentation step. All transcripts present in the experiment are broken into short fragments. There are two options for how fragment lengths are chosen: lengths can be drawn from a normal distribution with mean $\mu_{fl}$ and standard deviation $\sigma_{fl}$. By default, $\mu_{fl} = 250$ nucleotides and $\sigma_{fl} = 25$, but these parameters can be changed. Alternatively, fragment lengths can be drawn from an empirical length distribution included with the Polyester R package. This empirical distribution (Figure 1) was estimated from the insert sizes of the paired- end read alignments of the 7 GEUVADIS replicates described in Section 2.2, using Picard’s `CollectInsertSizeMetrics` tool (Broad Institute, 2014). The empirical density was estimated using the `logspline` function in R (Kooperberg and Stone, 1992; Kooperberg, 2013). Users can also supply their own fragment length distribution in `logspline` format. This distribution may be estimated from a user’s data set or varied to measure the effect of fragment length distribution on downstream results.
+
+_The next several code chunks were used to make Figure 1 of the paper_:
+```{r figure1}
+pd = pData(fpkm)
+qcstats = read.table('GD667.QCstats.masterfile.txt', header=TRUE, sep='\t')
+pd$lab = qcstats$SeqLabNumber[match(pd$SampleID, rownames(qcstats))]
+
+# samples to analyze: 1 from each lab
+set.seed(14)
+lab1id = sample(pd$dirname[pd$lab == 'F1'], size=1)
+lab2id = sample(pd$dirname[pd$lab == 'F2'], size=1)
+lab3id = sample(pd$dirname[pd$lab == 'F3'], size=1)
+lab4id = sample(pd$dirname[pd$lab == 'F4'], size=1)
+lab5id = sample(pd$dirname[pd$lab == 'F5'], size=1)
+lab6id = sample(pd$dirname[pd$lab == 'F6'], size=1)
+lab7id = sample(pd$dirname[pd$lab == 'F7'], size=1)
+selected = c(lab1id, lab2id, lab3id, lab4id, lab5id, lab6id, lab7id)
+selected
+table(pd$population[pd$dirname %in% selected])
+```
+
+_To get the insert sizes, we downloaded the GEUVADIS BAM files and ran `CollectInsertSizeMetrics` from Picard. That code is available in `make_insert_sizes.sh` and creates all the `metrics` files. It assumes the Picard Tools folder containing the `.jar` files that come with that download is in your working directory. Below we load in the `metrics` files and create our empirical fragment length distributionand Figure 1 of the manuscript. The file `empirical_density.rda` ships as a data set with Polyester._
+
+```{r estfrags}
+frag_sizes = Rle()
+set.seed(212)
+for(s in selected){
+    ind = which(selected == s)
+    metrics = file(paste0(s, '/', s, '_metrics'))
+    info = strsplit(readLines(metrics), '\t')
+    close(metrics)
+    dat = t(as.data.frame(info[-c(1:11, length(info))])) #extract sizes/counts
+    rownames(dat) = NULL
+    dat = matrix(as.numeric(dat), nrow=nrow(dat), ncol=ncol(dat))
+    dat = as.data.frame(dat)
+    names(dat) = c('size', 'count')
+    allnums = Rle(values=dat$size, lengths=dat$count)
+    samplednums = sort(sample(allnums, 1e5))
+    frag_sizes = sort(c(frag_sizes, samplednums))
+}
+empirical_density = logspline(as.integer(frag_sizes), 
+    lbound=min(frag_sizes), ubound=max(frag_sizes))
+save(empirical_density, file='data/empirical_density.rda', compress='xz')
+
+# FIGURE 1
+d = density(as.integer(frag_sizes))
+x = seq(75, max(frag_sizes), by=1)
+plot(x, dnorm(x, 250, 25), col='blue', 
+    type='l', lwd=2, xlab='Fragment Length', ylab='Density')
+lines(d, col='red', lwd=2)
+legend('topright', col=c('blue', 'red'), c('N(250, 25)', 'Empirical'), 
+    lwd=c(2,2))
+title('Normal and empirical fragment length distributions')
+```
+
+Ideally, the fragments generated from a transcript present in the sequencing sample would be uniformly distributed across the transcript. However, coverage across a transcript has been shown to be non-uniform (Mortazavi et al., 2008; Lahens et al., 2014; Li and Jiang, 2012). In Polyester, users can choose to generate fragments uniformly from transcripts, or they can select one of two possible positional bias models. These models were derived by Li and Jiang (2012), and they were based on two different fragmentation protocols.
+
+The first model is based on a cDNA fragmentation protocol, and reads are more likely to come from the 3’ end of the transcript being sequenced. The second model incorporates bias caused by a protocol relying on RNA fragmentation, where the middle of each transcript is more likely to be sequenced. Both these models were estimated from Illumina data. Since the exact data from Li and Jiang (2012) was not made available with the manuscript, we extracted the data from Supplementary Figure S3 of Li and Jiang (2012) ourselves, using WebPlotDigitizer (Rohatgi, 2014), which can estimate the coordinates of data points on a scatterplot given only an image of that scatterplot. For reference, the figure is reproduced here (Supplementary Figure 2), created using the probabilities included as data sets (`cdnaf.rda` and `rnaf.rda`) in the Polyester R package.
+
+_The code to create those data sets and Supplementary Figure 2 is below. The CSV files were the output from WebPlotDigitizer and are available for download [here](http://github.com/alyssafrazee/polyester_code)._
+
+```{r suppfigure2}
+### RNA fragmentation model:
+rnaf = read.csv('rnaf_pos_bias.csv', header=FALSE, colClasses=c('numeric', 'numeric'))
+names(rnaf) = c('pospct', 'prob')
+rnaf$pospct = seq(0.01, 1, by=0.01) 
+rnaf$prob[rnaf$prob < 0] = 0 #minor adjustment to y-axis calibration
+# make sure probabilities sum to 1: close anyway, but we'll be careful
+rnaf$prob = rnaf$prob/sum(rnaf$prob) 
+save(rnaf, file='data/rnaf.rda', compress='xz')
+
+### cDNA fragmentation model:
+cdnaf = read.csv('cdna_pos_bias.csv', header=FALSE, colClasses=c('numeric', 'numeric'))
+names(cdnaf) = c('pospct', 'prob')
+cdnaf$pospct = seq(0.01, 1, by=0.01)
+cdnaf$prob[cdnaf$prob < 0] = 0
+cdnaf$prob = cdnaf$prob/sum(cdnaf$prob)
+save(cdnaf, file='data/cdnaf.rda', compress='xz')
+
+### Suppelemntary Figure 2
+plot(cdnaf$pospct, cdnaf$prob, 
+    xlab='Fragment position in transcript (percent)',
+    ylab='Probability of selecting fragment',
+    type='l', col='blue', lwd=2)
+lines(rnaf$pospct, rnaf$prob, col='red', lwd=2)
+abline(h=0.01, col='gray70', lwd=2)
+legend('topleft', col=c('gray70', 'red', 'blue'), lwd=2, c('uniform', 'rnaf', 'cdnaf'))
+```
+
+#### 2.4.2 Sequencing
+Polyester simulates unstranded RNA-seq reads in a manner compatible with the Illumina paired-end protocol (Sengupta et al., 2011). In this protocol, read sequences are read off of double-stranded cDNA created from mRNA fragments, separated from other types of RNA using poly-A selection. To mimic this process in Polyester, each fragment selected from an original input transcript is reverse-complemented with probability 0.5: this means the read (for single-end experiments) or mate 1 of the read (for paired-end experiments) is equally likely to have originated from the transcript sequence itself and from the cDNA strand matched to the transcript fragment during sequencing.
+
+Reads are then generated based on these fragments. A single-end read consists of the first _R_ nucleotides of the fragment. For paired-end reads, these first _R_ nucleotides become mate 1, and the last _R_ nucleotides are read off and reverse-complemented to become mate 2. The reverse complementing happens because if mate 1 came from the actual transcript, mate 2 will be read from the complementary cDNA, and if mate 1 came from the complementary cDNA, mate 2 will come from the transcript itself (Illumina, 2011). By default, _R_ = 100 and can be adjusted by the user.
+
+Users can choose from a variety of sequencing error models. The simplest one is a uniform error model, where each nucleotide in a read has the same probability $p_e$ of being sequenced incorrectly, and every possible sequencing error is equally likely (for example, if there is an error at a nucleotide which was supposed to be a T, the incorrect base is equally likely to be a G, C, A, or N). In the uniform error model, $p_e$ = 0.005 by default and can be adjusted.
+
+Several empirical error models are also available in Polyester. These models are based on two dataset-specific models that ship with the GemSim software (McElroy et al., 2012). Separate models are available for a single- end read, mate 1 of a pair, and mate 2 of a pair, from two different sequencing protocols: Illumina Sequencing Kit v4 and TruSeq SBS Kit v5-GA (both from data sequenced on an Illumina Genome Analyzer IIx). These empirical error models include estimated probabilities of making each of the 4 possible sequencing errors at each position in the read. In general, empirical error probabilities increase toward the end of the read, and mate 2 has higher error probabilities than mate 1 of a pair, and the TruSeq SBS Kit v5-GA error probabilities were lower than the Illumina Sequencing Kit v4 error probabilities (Figure 2; Supplementary Figures 3-7).
+
+_The script `make_error_models.py` was used to estimate the empirical error models based on the `GemSim` models. The gzipped models come with the [GemSim download](http://sourceforge.net/projects/gemsim/), in the `models` folder. The python script assumes you have downloaded `GemSim` into the working directory. Once the error models have been estimated with Python (I've provided the models for you), the code below saves the error models for the Polyester package and makes Figure 2 and Supplementary Figures 3-7._
+
+```{r errorprep}
+modfolder = 'error_models' 
+platforms = c('ill100v4_mate1', 'ill100v4_mate2', 
+    'ill100v4_single', 'ill100v5_mate1', 'ill100v5_mate2', 
+    'ill100v5_single', 'r454ti_single')
+
+# polyester data sets:
+for(platform in platforms){
+    i = which(platforms == platform)
+    model = read.table(paste(modfolder, platform, sep='/'), header=TRUE)
+    names(model)[1] = 'refbase'
+    model$refbase = substr(model$refbase, 4, 4)
+    eval(parse(text=paste0('model', i, ' <- model')))
+    save(list=paste0('model',i), file=paste0('data/', platform, '.rda'), 
+        compress='xz')
+}
+
+## Figure 2, Suppelementary Figures 3-7
+colrs = RSkittleBrewer('tropical')
+getColor = function(nt){
+    switch(nt, A='black', C=colrs[1], G=colrs[2], T='deeppink', N=colrs[4])
+}
+nts = c('A','C','G','T','N')
+
+plot_nt = function(model, nt){
+    d = subset(model, refbase==nt)
+    wrongnts = nts[-which(nts==nt)]
+    errCols = paste0('read', wrongnts)
+    mnum = as.matrix(model[,2:6])
+    ymax = max(mnum[mnum<0.8])
+    plot(1:100, as.matrix(d[errCols[1]])[-1], col=makeTransparent(getColor(wrongnts[1])),
+        pch=19, cex=0.5, xlab='Read Position', ylab='Error Probability', 
+        type='o', ylim=c(0,ymax))
+    for(i in 2:4){
+        points(1:100, as.matrix(d[errCols[i]])[-1], pch=19, cex=0.5, type='o',
+            col=makeTransparent(getColor(wrongnts[i])))
+    }
+    title(nt)
+    legend('topleft', wrongnts, pch=19, col=sapply(wrongnts, getColor), cex=0.7)
+}
+
+plot_model = function(model, file=NULL){
+    if(!is.null(file)) pdf(file)
+    par(mfrow=c(2,2))
+    for(nt in c('A','C','G','T')){
+        plot_nt(model, nt)
+    }
+    if(!is.null(file)) dev.off()
+}
+```
+
+**Supplementary Figure 5**
+```{r suppfig5, fig.height=6, fig.width=6}
+plot_model(model1) 
+```
+
+**Supplementary Figure 6**
+```{r suppfig6, fig.height=6, fig.width=6}
+plot_model(model2) 
+```
+
+**Supplementary Figure 7**
+```{r suppfig7, fig.height=6, fig.width=6}
+plot_model(model3)
+```
+
+**Figure 2 (main manuscript)**
+```{r figure2, fig.height=6, fig.width=6}
+plot_model(model4)
+```
+
+**Supplementary Figure 3**
+```{r suppfig3, fig.height=6, fig.width=6}
+plot_model(model5) 
+```
+
+**Supplementary Figure 4**
+```{r suppfig4, fig.height=6, fig.width=6}
+plot_model(model6) 
+```
+
+Polyester can also handle custom error models: users can estimate an error model from their own sequencing data with the `GemErr` utility in `GemSim`. Detailed instructions on how to do this in a way compatible with Polyester are available in the package vignette.
+
+After generating sequencing reads and simulating sequencing error, reads are written to disk in FASTA format. The read identifier in the FASTA files specifies the transcript of origin for each read, facilitating assessment of downstream alignment accuracy. Other pertinent simulation information is also automatically written to disk for use in downstream analysis: for each transcript, the transcript name, differential expression status, and fold change is recorded. For each replicate, the file name, group identifier _j_, and library size factor is recorded.
+
+## 3. Results
+### 3.1 Comparison with Real Data
+To show that reads generated with Polyester exhibit realistic properties, we performed a small simulation experiment based on data from the 7 GEUVADIS RNA-seq replicates described in Section 2.2. For the experiment, we randomly selected 10 annotated genes with at least one highly-expressed isoform. We relied on the data-driven Cufflinks assembly to determine isoform expression: an annotated gene was considered to have highly-expressed isoforms if at least one of its annotated isoforms overlapped an assembled transcript with an average per-base coverage of at least 20 reads.
+
+The 10 genes that were randomly selected had 15 transcripts between them: two had 3 isoforms, one had 2 isoforms, and the rest had 1 isoform. For the 10 genes, we counted the number of reads overlapping them using the `summarizeOverlaps` function in the Bioconductor package GenomicAlignments (Lawrence et al., 2013). Counts were calculated from the TopHat-aligned reads from the GEUVADIS study for the 7 replicates described in Section 2.2. We then separated gene counts into isoform-level counts: we calculated per-isoform FPKM values for each of the 15 annotated transcripts using Cufflinks (Trapnell et al., 2010) in its abundance-estimation-only mode, and used the FPKM ratio between isoforms of the same gene to generate isoform-level counts to simulate based on the gene counts we had already obtained.
+
+We then used these isoform-level counts as input to Polyester, simulating a 7-replicate experiment with the specified number of reads being generated from each of the 15 selected annotated transcripts. Two experiments were simulated: one with all default options (no GC or positional bias, normal fragment length distribution with mean 250 and standard deviation 25, and uniform error model with 0.5% error probability) and one with all default options except for the positional bias model, for which we specified the rnaf bias model (Supplementary Figure 2, red line).
+
+The simulated reads were aligned to the hg19 genome with TopHat, and the coverage track for each experiment, for each simulated replicate was compared to the coverage track from the GEUVADIS replicate that generated the simulated replicate’s read count. For most of the transcripts, coverage tracks for both experiments looked reasonably similar to the observed coverage track in the GEUVADIS data set (see Figure 3 for a representative example).
+
+_The code below was used to to this experiment. First we get the 10 transcripts we are interested in. We will need the ballgown object from the GEUVADIS data set that includes coverage data._
+
+```{r, echo=FALSE, results='hide'}
+rm(fpkm)
+gc();gc();gc()
+```
+
+```{r get10tx}
+load('cov.rda')
+```
+
+_We will only consider transcripts with high coverage:_
+```{r expressed}
+expressed = exprfilter(cov, cutoff=20, meas='cov')
+```
+
+_Then we will map these transcripts back to annotated transcripts:_
+
+```{r mapannot, warning=FALSE}
+annotation = gffReadGR('genes.gtf', splitByTranscript=TRUE)
+matchup = annotate_assembly(assembled=structure(expressed)$trans, annotated=annotation)
+matchup$tId = names(structure(cov)$trans)[matchup$assembledInd]
+matchup$inExpressed = matchup$tId %in% transcriptIDs(expressed)
+```
+
+_Next we'll get the gene IDs in our experiment, in order._
+
+```{r geneorder}
+attfield = unlist(annotation)$group
+gnames = getAttributeField(as.character(attfield), 'gene_name')
+gnames = substr(gnames, 2, nchar(gnames)-1)
+splitnames = split(gnames, rep(seq_along(annotation), times=elementLengths(annotation)))
+genes_ord = sapply(splitnames, unique)
+```
+
+_Now we randomly select 10 annotated genes, choosing from genes with at least one transcript highly expressed. We'll write out those gene structures in a GTF file. For some reason, the seed recorded (8248) isn't giving the same 10 genes when I run this with knitr, so I might have recorded the wrong seed. This document pre-sets the genes that I randomly selected before._
+
+```{r selgenes}
+candidate_genes = unique(genes_ord[matchup$annotatedInd[matchup$inExpressed]])
+#set.seed(8248) #this was the seed, but gives wrong genes
+#experiment_genes = sample(candidate_genes, 10, replace=FALSE)
+experiment_genes = c('PIK3C2B', 'AASDHPPT', 'GNPNAT1',
+  'SLC25A17', 'PAICS', 'THOC3', 'CD83', 'GTF2H5', 
+  'VCP', 'CUL4B')
+gtfdf = gffRead('genes.gtf')
+gtfdf$gene = getAttributeField(gtfdf$attributes, 'gene_id')
+gtfdf$gene = substr(gtfdf$gene, 2, nchar(gtfdf$gene)-1)
+smallgtf = subset(gtfdf, gene %in% experiment_genes)
+write.table(smallgtf[,1:9], 'ten_genes.gtf', col.names=FALSE,
+    quote=FALSE, row.names=FALSE, sep='\t')
+```
+
+_Then we count the number of reads overlapping each gene and divide those gene counts among isoforms using ratios specified by isoform-level abundance estimates. We use `GenomicAlignments` to do the gene counting (in `make_countmat.R`) and `Cufflinks` version 2.2.1 to do the abundance ratios between isoforms (in `ten_genes_experiment/tengenes_cufflinks.sh`). The code below gets the transcript-level counts for the simulation presented in the manuscript; the matrix is used in the simulation code in the next chunk._
+
+```{r getcounts}
+load('countmat.rda')
+fpkmList = NULL
+geuvadis_fpkms = matrix(NA, nrow=15, ncol=7)
+colnames(geuvadis_fpkms) = rep('x', 7)
+i = 1
+for(samp in c('NA06985', 'NA12144', 'NA12776', 
+    'NA18858', 'NA20542', 'NA20772', 'NA20815')){
+    colnames(geuvadis_fpkms)[i] = samp
+    fpkmList[[i]] = read.table(paste0(samp, '/isoforms.fpkm_tracking'), header=TRUE)
+    if(i == 1){
+        rownames(geuvadis_fpkms) = fpkmList[[i]]$tracking_id
+    }
+    stopifnot(all(fpkmList[[i]]$tracking_id == rownames(geuvadis_fpkms)))
+    geuvadis_fpkms[,i] = fpkmList[[i]]$FPKM
+    i = i+1
+}
+
+gtfdf = gffRead('ten_genes.gtf')
+transcripts = getAttributeField(gtfdf$attributes, 'transcript_id')
+length(unique(transcripts))
+transcripts = strip_quotes(transcripts)
+sum(transcripts %in% fpkmList[[1]]$tracking_id) / length(transcripts)
+genes = getAttributeField(gtfdf$attributes, 'gene_name')
+length(unique(genes))
+g2t = split(transcripts, genes)
+g2t = lapply(g2t, unique)
+
+genefpkm = lapply(fpkmList, function(x){
+    tnames = split(x$tracking_id, x$gene_id)
+    ret = split(x$FPKM, x$gene_id)
+    for(i in seq_along(ret)){
+        names(ret[[i]]) = tnames[[i]]
+    }
+    return(ret)
+})
+transcript_percents = lapply(genefpkm, function(x){
+    lapply(x, function(y){
+        y / sum(y)
+    })
+})
+
+transcript_counts = matrix(unlist(transcript_percents), ncol=7)
+colnames(transcript_counts) = colnames(countmat)
+rownames(transcript_counts) = names(unlist(transcript_percents))[1:15]
+gene_id = ss(rownames(transcript_counts), pattern='\\.', slot=1)
+rownames(transcript_counts) = ss(rownames(transcript_counts), pattern='\\.', slot=2)
+
+count_ind = match(gene_id, strip_quotes(rownames(countmat)))
+transcript_counts = round(transcript_counts * countmat[count_ind,])
+head(transcript_counts)
+```
+
+_We then simulated the specified number of reads from each of the 15 transcripts in the 10-gene data set using this code (not evaluated during knitting; reads available in repository):_
+
+```{r simreads, eval=FALSE}
+seqpath = 'Homo_sapiens/UCSC/hg19/Sequence/Chromosomes' 
+stringset = seq_gtf('ten_genes.gtf', seqs=seqpath)
+transcript_counts = transcript_counts[match(strip_quotes(names(stringset)), 
+    rownames(transcript_counts)),]
+
+# simulate the experiment:
+outdir = 'ten_genes_experiment/reads'
+simulate_experiment_countmat(gtf='ten_genes.gtf', seqpath=seqpath, 
+    readmat=transcript_counts, outdir=outdir, seed=1482)
+
+# simulate experiment with rnaf bias:
+outdir = 'ten_genes_experiment/reads_bias'
+simulate_experiment_countmat(gtf='ten_genes.gtf', seqpath=seqpath, 
+    readmat=transcript_counts, outdir=outdir, seed=1120, bias='rnaf')
+```
+
+_These simulated reads were then run through the TopHat/Cufflinks RNA-seq processing pipeline using the code in the `ten_genes` folder; namely,`tophat.sh`, `tophat_bias.sh`, `cufflinks.sh`, and `cufflinks_bias.sh`. The output in this folder was used to create Figure 3, Supplementary Figure 8, Supplementary Figure 9, and [these supplementary plots](http://figshare.com/articles/Coverage_Plots/1225636)._
+
+_Here we read in the gene structures and BAM file names and define a plotting function:_
+
+```{r figure3setup}
+sNames = c('NA06985', 'NA12144', 'NA12776', 
+    'NA18858', 'NA20542', 'NA20772', 'NA20815')
+bf = paste0(sNames, '/', sNames, '_accepted_hits.bam')
+tx = gffReadGR('ten_genes.gtf', splitByTranscript=TRUE)
+myflag = scanBamFlag(isDuplicate=FALSE, isNotPassingQualityControls=FALSE)
+genes = lapply(tx, function(x){
+    unique(getAttributeField(as.character(mcols(x)$group), 'gene_id'))
+})
+
+trackplot = function(gene, sampleind){
+    gene_inds = which(genes == gene)
+    gene1 = unlist(tx[gene_inds])
+    mcols(gene1) = NULL
+    param = ScanBamParam(which=gene1, flag=myflag)
+    alignments = readGAlignments(bf[sampleind], param=param)
+    plot_xlim = c(min(start(gene1))-20, max(end(gene1))+20)
+    xax = plot_xlim[1]:plot_xlim[2]
+    chr = unique(as.character(seqnames(gene1)))
+
+    # real coverage:
+    covrlelist = coverage(alignments)
+    ind = which(names(covrlelist) == chr)
+    covtrack = covrlelist[[ind]][xax]
+
+    # simulated coverage: unbiased
+    simfile = paste0('ten_genes_experiment/alignments/sample0',
+        sampleind, '_accepted_hits.bam')
+    simalignments = readGAlignments(simfile, param=param)
+    covrlelist2 = coverage(simalignments)
+    simcov = covrlelist2[[which(names(covrlelist2) == chr)]][xax]
+
+    # simulated coverage: biased
+    simfile_bias = paste0('ten_genes_experiment/alignments_bias/sample0',
+        sampleind, '_accepted_hits.bam')
+    simaln_bias = readGAlignments(simfile_bias, param=param)
+    covrlelist3 = coverage(simaln_bias)
+    simcov_bias = covrlelist3[[which(names(covrlelist3) == chr)]][xax]
+
+    ymax = max(c(covtrack, simcov, simcov_bias))
+    transcript_width = round(ymax/4)
+    isoforms = tx[gene_inds]
+    ymin = -length(gene_inds)*transcript_width - 0.5*transcript_width
+
+    # draw the coverages:
+    plot(xax, simcov, type='l', col='blue', ylab='',
+        xlab=paste0('genomic position, ',chr), ylim=c(ymin, ymax), yaxt='n',) # y label needs to move up a bit
+    lines(xax, simcov_bias, col='deeppink')
+    lines(xax, covtrack, col='black')
+    axis(side=2, at=pretty(0:ymax), labels=as.character(pretty(0:ymax)))
+
+    for(txind in seq_along(isoforms)){
+        trx = isoforms[[txind]]
+        for(exind in seq_along(trx)){
+            # draw the exons
+            yup = -txind*transcript_width - (0.4*transcript_width)
+            ydown = -txind*transcript_width + (0.4*transcript_width)
+            polygon(x=c(start(trx)[exind], start(trx)[exind], 
+                end(trx)[exind], end(trx)[exind]), 
+                y=c(ydown, yup, yup, ydown), col='gray20')
+
+            # draw the lines connecting exons
+            if(exind != length(trx)){
+                lines(c(end(trx)[exind], start(trx)[exind+1]), 
+                    c(-txind*transcript_width, -txind*transcript_width), 
+                    lwd=2, col='gray60')
+            }
+        }
+    }
+
+    abline(h=0.5*(0.4*transcript_width-transcript_width), col='gray')
+}
+```
+
+_For Figure 3, we wanted to remove some of the whitespace in a very large intron, which required some extra coding:_
+
+```{r figure3prep, fig.width=8, fig.height=4}
+gene = '"CD83"'
+sampleind = 1
+gene_inds = which(genes == gene)
+gene1 = unlist(tx[gene_inds])
+mcols(gene1) = NULL
+param = ScanBamParam(which=gene1, flag=myflag)
+alignments = readGAlignments(bf[sampleind], param=param)
+plot_xlim = c(min(start(gene1))-20, max(end(gene1))+20)
+xax = plot_xlim[1]:plot_xlim[2]
+chr = unique(as.character(seqnames(gene1)))
+covrlelist = coverage(alignments)
+ind = which(names(covrlelist) == chr)
+covtrack = covrlelist[[ind]][xax]
+
+# find the giant intron
+bigstart = which.max(runLength(covtrack))
+iwidth = max(runLength(covtrack))
+istart = sum(runLength(covtrack)[1:(bigstart-1)])
+covtmp_black = covtrack
+runLength(covtmp_black)[bigstart] = runLength(covtmp_black)[bigstart]-(iwidth-500)
+
+simfile = paste0('ten_genes_experiment/alignments/sample0',
+    sampleind, '_accepted_hits.bam')
+simalignments = readGAlignments(simfile, param=param)
+covrlelist2 = coverage(simalignments)
+simcov = covrlelist2[[which(names(covrlelist2) == chr)]][xax]
+covtmp_blue = simcov
+runLength(covtmp_blue)[which.max(runLength(covtmp_blue))] = runLength(covtmp_blue)[which.max(runLength(covtmp_blue))]-(iwidth-500)
+
+simfile_bias = paste0('ten_genes_experiment/alignments_bias/sample0',
+    sampleind, '_accepted_hits.bam')
+simaln_bias = readGAlignments(simfile_bias, param=param)
+covrlelist3 = coverage(simaln_bias)
+simcov_bias = covrlelist3[[which(names(covrlelist3) == chr)]][xax]
+covtmp_pink = simcov_bias
+runLength(covtmp_pink)[which.max(runLength(covtmp_pink))] = runLength(covtmp_pink)[which.max(runLength(covtmp_pink))]-(iwidth-500)
+
+txtmp = tx[c(1,5,8)]
+txtmp = lapply(txtmp, function(x){
+    ret = x
+    start(ret)[3:5] = start(ret)[3:5]-(iwidth-500)
+    end(ret)[3:5] = end(ret)[3:5]-(iwidth-500)
+    return(ret)
+})
+txtmp = lapply(txtmp, function(x){
+    ret = x
+    start(ret) = start(ret) - plot_xlim[1]
+    end(ret) = end(ret) - plot_xlim[1]
+    return(ret)
+})
+
+ymax = max(c(covtmp_black, covtmp_blue, covtmp_pink))
+transcript_width = round(ymax/4)
+isoforms = txtmp
+ymin = -length(gene_inds)*transcript_width - 0.5*transcript_width
+
+# here's the plot:
+plot(covtmp_blue, type='l', col='blue', ylab='',
+    xlab='genomic position, chr6', ylim=c(ymin, ymax), yaxt='n', xaxt='n')
+lines(covtmp_pink, col='deeppink')
+lines(covtmp_black, col='black')
+axis(side=2, at=pretty(0:ymax), labels=as.character(pretty(0:ymax)))
+intron_start_ind = which(xax == 14118297)
+xax_print = xax[-c(intron_start_ind:(intron_start_ind+iwidth-500))]
+labels = xax_print[c(1, pretty(1:length(covtmp_blue))[-1])]
+labels = labels+6
+labels[8] = 14137300
+axis(side=1, at=pretty(1:length(covtmp_blue))[-2], labels=labels[-2])
+abline(v=istart+20, lty=3, col='gray', lwd=3)
+
+isoforms = txtmp
+for(txind in seq_along(isoforms)){
+    trx = isoforms[[txind]]
+    for(exind in seq_along(trx)){
+        # draw the exons
+        yup = -txind*transcript_width - (0.4*transcript_width)
+        ydown = -txind*transcript_width + (0.4*transcript_width)
+        polygon(x=c(start(trx)[exind], start(trx)[exind], 
+            end(trx)[exind], end(trx)[exind]), 
+            y=c(ydown, yup, yup, ydown), col='gray20')
+        # draw the lines connecting exons
+        if(exind != length(trx)){
+            lines(c(end(trx)[exind], start(trx)[exind+1]), 
+               c(-txind*transcript_width, -txind*transcript_width), 
+                    lwd=2, col='gray60')
+        }
+    }
+}
+abline(h= 0.5*(0.4*transcript_width-transcript_width), col='gray')
+legend('topright', col=c('black','blue','deeppink'), 
+    c('GEUVADIS', 'simulated uniform', 'simulated rnaf bias'), lty=1, cex=0.5)
+```
+
+The simulated coverage tracks were smoother than the coverage track from the GEUVADIS data set, but major trends in the coverage patterns within exons were captured by the simulated reads. There are annotated transcripts for which reads generated by Polyester do not adequately capture the observed coverage in the GEUVADIS data set (Supplementary Figure 8), especially when positional bias is added. This seems to mainly occur in cases where only a very small part of a large exon appears to be expressed in the data set (as is the case in Supplementary Figure 8). The coverage for most of the other transcripts was similar to the real data for most genes and replicates. Plots for all transcripts, all replicates [are available here](http://dx.doi.org/10.6084/m9.figshare.1225636). Reads simulated with rnaf bias sometimes had poor coverage for genes consisting of transcripts with many small exons.
+
+**Supplementary Figure 8**
+```{r suppfigure8, fig.width=8, fig.height=4}
+trackplot('"GTF2H5"', 4) 
+legend(158600000, 600, col=c('black','blue','deeppink'), 
+    c('GEUVADIS', 'simulated uniform', 'simulated rnaf bias'), lty=1)
+```
+
+_We now move on to analyzing correlation between FPKM estimates in the different scenarios (GEUVADIS data, uniform fragment generation, biased fragment generation). The following code calculates the correlations based on the Ballgown object (for the GEUVADIS data) and the Cufflinks estimates for the simulated data:_
+
+```{r corrcalcs}
+unif_fpkms = matrix(NA, nrow=15, ncol=7)
+unif_dir = 'ten_genes_experiment/assemblies'
+for(i in 1:7){
+    tab = read.table(paste0(unif_dir, '/sample0', i, '/isoforms.fpkm_tracking'), header=TRUE)
+    if(i == 1){
+        rownames(unif_fpkms) = tab$tracking_id
+    }
+    input = tab$FPKM[match(rownames(unif_fpkms), tab$tracking_id)]
+    unif_fpkms[,i] = input
+}
+
+bias_fpkms = matrix(NA, nrow=15, ncol=7)
+bias_dir = 'ten_genes_experiment/assemblies_bias'
+for(i in 1:7){
+    tab = read.table(paste0(bias_dir, '/sample0', i, '/isoforms.fpkm_tracking'), header=TRUE)
+    if(i == 1){
+        rownames(bias_fpkms) = tab$tracking_id
+    }
+    input = tab$FPKM[match(rownames(bias_fpkms), tab$tracking_id)]
+    bias_fpkms[,i] = input
+}
+
+# sort all the matrices in the same order
+unif_fpkms = unif_fpkms[match(rownames(geuvadis_fpkms), rownames(unif_fpkms)),]
+bias_fpkms = bias_fpkms[match(rownames(geuvadis_fpkms), rownames(bias_fpkms)),]
+unif_corrs = sapply(1:7, function(i) cor(geuvadis_fpkms[,i], unif_fpkms[,i]))
+bias_corrs = sapply(1:7, function(i) cor(geuvadis_fpkms[,i], bias_fpkms[,i]))
+```
+
+For these 15 simulated transcripts, FPKM estimates were positively correlated between each simulated data set and the GEUVADIS data set for each replicate. To get data for this comparison, we used Cufflinks’s abundance-estimation-only mode to get expression estimates for the 15 isoforms based on the simulated reads’ alignments, in the same way we calculated expression for the GEUVADIS replicates. We calculated correlation between FPKM estimates of the 15 transcripts for the GEUVADIS data set and for each of the simulated data sets, using correlation instead of absolute FPKM because normalization for number of mapped reads put the sets of FPKMs on different scales.
+
+For the simulation without positional bias, the correlation was extremely high: the minimum correlation across the 7 replicates studied was `r min(unif_corrs)`. However, the FPKM estimates were less correlated when RNA-fragmentation-related positional bias was induced: all correlations were positive, but weak (Supplementary Figure 9). These results generally indicate that realistic coverage profiles can be obtained with Polyester but that adding positional bias may cause problems when transcripts have unusual structure. The correlation in FPKM estimates between the simulated data sets and the GEUVADIS samples suggests that Polyester captures transcript level variation in gene expression data.
+
+**Supplementary Figure 9**
+```{r suppfigure9, fig.height=5, fig.width=5}
+boxlabels = rep(c('Uniform', 'Bias'), each=7)
+boxplot(c(unif_corrs, bias_corrs) ~ boxlabels, 
+        pch=19, lty=1, ylab='Correlations',border=c('deeppink', 'blue'), 
+        col=c(makeTransparent('deeppink'), makeTransparent('blue')))
+```
+
+### 3.2 Use case: Assessing the accuracy of a differential expression method
+To demonstrate a use case for Polyester, we simulated two small differential expression experiments and attempted to discover the simulated differential expression using limma (Smyth, 2005).
+
+The first experiment used the default size parameter in Polyester, which means the variance of the distribution from which each transcript’s count is drawn is equal to 4 times the mean of that distribution. In other words, the mean and variance of the transcript counts are linearly related. We refer to this experiment as “low variance.” The second experiment set the size parameter to 1 for all transcripts, regardless of the mean count, which means each transcript’s mean and variance are quadratically related. This experiment was the “high variance” experiment.
+
+In both scenarios, the main wrapper function in Polyester was used to simulate classic two-group experiments. Reads were simulated from transcripts on human chromosome 22 (hg19 build, N = 926). $\mu_k$ was set to length(transcript$_k$)/5, which corresponds to approximately 20x coverage for reads of length 100. We randomly chose 75 transcripts to have $\lambda = 3$ and 75 to have $\lambda = 1/3$; the rest had $\lambda = 1$. For $n_j = 7$ replicates in each group _j_, we simulated paired-end reads from 250-base fragments ($\sigma_{fl} = 25$), with a uniform error probability and the default error rate of 0.005. Simulated reads were aligned to hg19 with TopHat 2.0.13 (Trapnell et al., 2009), and Cufflinks 2.2.1 (Trapnell et al., 2010) was used to obtain expression estimates for the 926 transcripts from which transcripts were simulated. Expression was measured using FPKM (fragments per kilobase per million mapped reads). We then ran transcript-level differential expression tests using limma (Smyth, 2005). Specifically, for each transcript k, the following linear model was fit:
+
+$$\text{log}_2(\text{FPKM}_k + 1) = \alpha_k + \beta_kX_j + \gamma_kW_j$$
+
+where FPKM$_k$ is the expression measurement for transcript _k_, $X_j$ is 0 or 1 depending on which group sample _j_ was assigned to, and $W_j$ is a library-size adjustment, defined as the 75th percentile over all _k_ of the log$_2$(FPKM + 1) values for replicate _j_ (Paulson et al., 2013). We fit these linear models for each transcript, and for each $\beta_k$, we calculated moderated t-statistics and associated p-values using the shrinkage methodology in _limma_'s `eBayes` function. We calculated ROC curves based on these p-values and our knowledge of the true differential expression status of each transcript. Sensitivity and specificity of the _limma_ differential expression analysis were high for the small-variance scenario, but were diminished in the large-variance scenario, as expected (Figure 4).
+
+_Reads were simulated with the R code below, which doesn't run during knitting. Simulated reads were aligned with TopHat, and transcript abundances were estimated with Cufflinks. Shell scripts that do the TopHat and Cufflinks processing are available in the `de_experiment` subfolder of this repository. The `reads` and `alignments` subdirectories don't actually contain the reads and alignments, but the reads and alignments can be generated with the R code below and the `tophat_*.sh` shell scripts._
+
+```{r desimreads}
+gtf = gffRead('genes.gtf')
+gtf22 = subset(gtf, seqname=='chr22' & feature=='exon')
+write.table(gtf22, file='chr22.gtf', col.names=FALSE, row.names=FALSE,
+    quote=FALSE, sep='\t')
+gtf22$transcript = getAttributeField(gtf22$attributes, 'transcript_id')
+seqpath = 'Homo_sapiens/UCSC/hg19/Sequence/Chromosomes'
+
+# define baseline & differential expression
+exons = IRanges(start=gtf22$start, end=gtf22$end)
+exon_list = split(exons, gtf22$transcript)
+widths = width(exon_list)
+transcript_lengths = sapply(widths, sum)
+num_tx = length(unique(gtf22$transcript))
+set.seed(142)
+deInds = sample(1:num_tx, size=150)
+fold_changes = rep(1, num_tx)
+fold_changes[deInds] = rep(c(3,1/3), length(deInds)/2)
+# ~20x coverage ----> n per tx = length/readlength * 20                        
+readspertx = 20 * transcript_lengths / 100
+```
+
+```{r simnoeval, eval=FALSE}
+# simulate the reads!                              
+### first: default variability parameter
+simulate_experiment(gtf='chr22.gtf', seqpath=seqpath,
+    reads_per_transcript=readspertx, num_reps=7,
+    fold_changes=fold_changes, outdir='de_experiment/reads/small_variance')
+
+### second: increase variability
+simulate_experiment(gtf='chr22.gtf', seqpath=seqpath,
+    reads_per_transcript=readspertx, num_reps=7,
+    fold_changes=fold_changes, size=1, outdir='de_experiment/reads/large_variance')
+```
+
+_The code below uses the FPKM estimates from the simulated data (in the `assemblies` folder) to create Figure 4:_
+
+```{r figure4, fig.width=6, fig.height=6}
+s1 = read.table(
+    'de_experiment/assemblies/large_variance/sample01/isoforms.fpkm_tracking', 
+    header=TRUE)
+transcripts = s1$tracking_id
+fpkm_large = fpkm_small = matrix(NA, nrow=length(unique(transcripts)), ncol=14)
+rn = unique(transcripts)
+rownames(fpkm_large) = rownames(fpkm_small) = transcripts 
+
+fpkm_large[,1] = s1$FPKM
+
+for(i in 1:14){
+    istring = formatC(i, width=2, format="d", flag="0") 
+    if(i>1){
+        largedat = read.table(paste0('de_experiment/assemblies/large_variance/sample', 
+            istring, '/isoforms.fpkm_tracking'), header=TRUE)
+        meas = largedat$FPKM[match(rownames(fpkm_large), largedat$tracking_id)]
+        fpkm_large[,i] = meas
+    }
+    smalldat = read.table(paste0('de_experiment/assemblies/small_variance/sample',
+        istring, '/isoforms.fpkm_tracking'), header=TRUE)
+    meas = smalldat$FPKM[match(rownames(fpkm_small), smalldat$tracking_id)]    
+    fpkm_small[,i] = meas
+}
+
+# do statistical tests with limma
+
+### large variance:
+lib_adjust = apply(fpkm_large, 2, function(x){
+    quantile(log2(x+1), 0.75)
+})
+y = log2(fpkm_large+1)
+trt = rep(c(1,0), each=7)
+x = model.matrix(~ trt + lib_adjust)
+fit = lmFit(y, x)
+fit = eBayes(fit, trend=TRUE)
+pvals = fit$p.value[,2]
+qvals = p.adjust(pvals, 'fdr')
+
+siminfo = read.table('de_experiment/reads/large_variance/sim_tx_info.txt', header=TRUE)
+reallyde = siminfo[siminfo$DEstatus,]$transcriptid
+notde = siminfo[!siminfo$DEstatus,]$transcriptid
+
+qaxis = seq(0,1,by=0.01)
+sens=spec=NULL
+for(i in seq_along(qaxis)){
+    sens[i] = sum(reallyde %in% names(qvals[qvals<qaxis[i]])) / length(reallyde)
+    spec[i] = sum(notde %in% names(qvals[qvals>=qaxis[i]])) / length(notde)
+}
+
+### small variance:
+lib_adjust = apply(fpkm_small, 2, function(x){
+    quantile(log2(x+1), 0.75)
+})
+y = log2(fpkm_small+1)
+fit = lmFit(y, x)
+fit = eBayes(fit, trend=TRUE)
+pvals2 = fit$p.value[,2]
+qvals2 = p.adjust(pvals2, 'fdr')
+
+siminfo = read.table('de_experiment/reads/small_variance/sim_tx_info.txt', header=TRUE)
+reallyde = siminfo[siminfo$DEstatus,]$transcriptid
+notde = siminfo[!siminfo$DEstatus,]$transcriptid
+
+qaxis = seq(0,1,by=0.01)
+sens2 = spec2 = NULL
+for(i in seq_along(qaxis)){
+    sens2[i] = sum(reallyde %in% names(qvals2[qvals2<qaxis[i]])) / length(reallyde)
+    spec2[i] = sum(notde %in% names(qvals2[qvals2>=qaxis[i]])) / length(notde)
+}
+
+plot(1-spec, sens, type='l', xlab='False Positive Rate',
+    ylab='True Positive Rate', col='dodgerblue', lwd=2, lty=5)
+lines(1-spec2, sens2, col='orange', lwd=2) 
+legend('bottomright', lty=c(5,1), lwd=2, 
+    col=c('dodgerblue', 'orange'), c('high variance', 'low variance'))
+```
+
+_The following code does the calculations for the next paragraph:_
+
+```{r coefcalcs}
+coefs_small = fit$coefficients[,2]
+lib_adjust = apply(fpkm_large, 2, function(x){
+    quantile(log2(x+1), 0.75)
+})
+y = log2(fpkm_large+1)
+fit = lmFit(y, x)
+fit = eBayes(fit, trend=TRUE)
+coefs_large = fit$coefficients[,2]
+
+nonde_inds = which(names(coefs_small) %in% notde)
+up_inds = which(names(coefs_small) %in% siminfo$transcriptid[siminfo$foldchange>1])
+down_inds = which(names(coefs_small) %in% siminfo$transcriptid[siminfo$foldchange<1])
+stopifnot(sum(names(coefs_small) != names(coefs_large)) == 0)
+mean(coefs_large[up_inds])
+mean(coefs_large[down_inds])
+mean(coefs_small[up_inds]) 
+mean(coefs_small[down_inds])
+```
+
+Since expression fold changes can be explicitly specified in Polyester, we can also investigate whether those fold changes are preserved throughout this RNA-seq data analysis pipeline (Figure 5). In general, the coefficient distributions for transcripts not specified to be differentially expressed were centered around zero, as expected, since models were fit on the log scale. The coefficient distributions should have been centered around log$_2$(3) = 1.58 for the overexpressed transcripts (expression level three times higher in the first group), and around log$_2$(1/3) = -1.58 for the underexpressed transcripts (expression level three time higher in the second group). The overexpressed distributions had means `r mean(coefs_large[up_inds])` and `r mean(coefs_small[up_inds])` in the high and low-variance scenarios, respectively, and the underexpressed distributions had means `r mean(coefs_large[down_inds])` and `r mean(coefs_small[down_inds])` in the high- and low-variance scenarios, respectively. Coefficient estimates were much more variable in the scenario with higher expression variance (Figure 5). These numbers are similar to the specified value of 1.58, indicating that the RNA-seq pipeline used to analyze these data sets satisfactorily captured the existence and magnitude of the differential expression set in the experiment simulated with Polyester.
+
+
+```{r figure5, fig.height=5, fig.width=10}
+par(mfrow=c(1,2))
+plot(density(coefs_large[nonde_inds]), col='blue', lwd=2,
+    xlab='Fitted Coefficient (log scale)', ylim=c(0, 0.4),
+    main='(a) Large variance scenario', xlim=c(-6, 9))
+lines(density(coefs_large[up_inds]), col='deepskyblue', lwd=2, lty=5)
+lines(density(coefs_large[down_inds]), col='navy', lwd=2, lty=6)
+legend('topright', c('underexpressed', 'not DE', 'overexpressed'),
+    col=c('navy', 'blue', 'deepskyblue'), lwd=2, lty=c(6,1,5),cex=0.5)
+
+plot(density(coefs_small[nonde_inds]), col='blue', lwd=2,
+    xlab='Fitted Coefficient (log scale)', ylim=c(0, 3.5),
+    main='(b) Small variance scenario', xlim=c(-6, 9))
+lines(density(coefs_small[up_inds]), col='deepskyblue', lwd=2, lty=5)
+lines(density(coefs_small[down_inds]), col='navy', lwd=2, lty=6)
+legend('topright', c('underexpressed', 'not DE', 'overexpressed'),
+    col=c('navy', 'blue', 'deepskyblue'), lwd=2, lty=c(6,1,5), cex=0.5)
+```
+
+For this differential experiment, where about 639,000 reads per sample were simulated, read generation took 1-2 minutes per biological replicate in the experiment and 4.4G memory was used on a single cluster node with one core.
+
+These examples illustrate some of the many possible ways Polyester can be used to explore the effects of analysis choices on downstream differential expression results.
+
+## 4. Discussion
+In this paper, we propose a lightweight, flexible RNA-seq read simulator allowing users to set differential expression levels at the isoform level. A full experiment with biological replicates can be simulated with one command, and time-consuming alignment is not required beforehand.
+
+The sequencing process is complex, and some subtleties and potential biases present in that process are not yet implemented in Polyester but could be in the future. For example, adding random hexamer priming bias (Hansen et al., 2010), implementing PCR amplification bias (Fang and Cui, 2011) or other biases that depend on the specific nucleotides being sequenced, simulating quality scores for base calls, and adding the ability to simulate indels are all possibilities for future improvements. However, our comparisons with real data suggest that the Polyester model sufficiently mimicks real sequencing data to be practically useful.
+
+## 5. Software
+Polyester is available from Bioconductor ([link](http://bioconductor.org/packages/release/bioc/html/polyester.html)). The development version is [available on GitHub](https://github.com/alyssafrazee/polyester). Community contributions and bug reports are welcomed in the development version. Code for the analysis shown in this paper is available [here](https://github.com/alyssafrazee/polyester_code). In fact, the contents of that repository are in _this very document_. 
+
+## Acknowledgements
+Funding: JL and BL are supported by NIH R01 GM105705. AF is supported by a Hopkins Sommer Scholarship. AJ is supported by the Lieber Institute for Brain Development.
+
+## References
+AC’t Hoen, P., Friedländer, M. R., Almlöf, J., Sammeth, M., Pulyakhina, I., Anvar, S. Y., Laros, J. F., Buermans, H. P., Karlberg, O., Brännvall, M., et al. (2013). Reproducibility of high-throughput mRNA and small RNA sequencing across laboratories. _Nature Biotechnology_.
+
+Anders, S. and Huber, W. (2010). Differential expression analysis for sequence count data. _Genome Biology_, 11(10), R106.
+
+Benjamini, Y. and Speed, T. P. (2012). Summarizing and correcting the GC content bias in high-throughput sequencing. _Nucleic Acids Research_, page gks001.
+
+Broad Institute (2014). Picard. http://broadinstitute.github.io/picard/. Accessed: 2014-09-22.
+
+Bullard, J. H., Purdom, E., Hansen, K. D., and Dudoit, S. (2010). Evaluation of statistical methods for normalization and differential expression in mRNA-seq experiments. _BMC Bioinformatics_, 11(1), 94.
+
+Fang, Z. and Cui, X. (2011). Design and validation issues in RNA-seq experiments. _Briefings in Bioinformatics_, page bbr004.
+Frazee, A. (2014). Coverage Plots. http://dx.doi.org/10.6084/m9.figshare.1225636.
+
+Frazee, A. C., Pertea, G., Jaffe, A. E., Langmead, B., Salzberg, S. L., and Leek, J. T. (2014). Flexible isoform-level differential expression analysis with Ballgown. biorXiv doi: http://dx.doi.org/10.1101/003665.
+
+Grant, G. R., Farkas, M. H., Pizarro, A. D., Lahens, N. F., Schug, J., Brunk, B. P., Stoeckert, C. J., Hogenesch, J. B., and Pierce, E. A. (2011). Comparative analysis of RNA-seq alignment algorithms and the RNA-seq unified mapper (RUM). _Bioinformatics_, 27(18), 2518–2528.
+
+Griebel, T., Zacher, B., Ribeca, P., Raineri, E., Lacroix, V., Guigo ́, R., and Sammeth, M. (2012). Modelling and simulating generic RNA-seq experiments with the flux simulator. _Nucleic Acids Research_, 40(20), 10073–10083.
+
+Hansen, K. D., Brenner, S. E., and Dudoit, S. (2010). Biases in Illumina transcriptome sequencing caused by random hexamer priming. _Nucleic Acids Research_, 38(12), e131–e131.
+
+Hansen, K. D., Irizarry, R. A., and Zhijin, W. (2012). Removing technical variability in RNA-seq data using conditional quantile normalization. _Biostatistics_, 13(2), 204– 216.
+
+Illumina (2011). Truseq RNA and DNA sample preparation kits v2. http://res.illumina.com/documents/products/datasheets/datasheet_truseq_sample_prep_kits.pdf. Accessed: 2014-10-31. 
+
+Ismail, N. and Jemain, A. A. (2007). Handling overdispersion with negative binomial and generalized Poisson regression models. In _Casualty Actuarial Society Forum_,
+pages 103–158. Citeseer.
+
+Kooperberg, C. (2013). logspline: Logspline density estimation routines. R package
+version 2.1.5.
+
+Kooperberg, C. and Stone, C. J. (1992). Logspline density estimation for censored data. _Journal of Computational and Graphical Statistics_, 1, 301–328.
+
+Lahens, N. F., Kavakli, I. H., Zhang, R., Hayer, K., Black, M. B., Dueck, H., Pizarro, A., Kim, J., Irizarry, R. A., Thomas, R. S., et al. (2014). IVT-seq reveals extreme bias in RNA-sequencing. _Genome Biology_, 15, R86.
+
+Lappalainen, T., Sammeth, M., Friedla ̈nder, M. R., ACt Hoen, P., Monlong, J., Rivas,
+M. A., Gonza`lez-Porta, M., Kurbatova, N., Griebel, T., Ferreira, P. G., et al. (2013). Transcriptome and genome sequencing uncovers functional variation in humans. _Nature_.
+
+Lawless, J. F. (1987). Negative binomial and mixed poisson regression. _Canadian Journal of Statistics_, 15(3), 209–225.
+
+Lawrence, M., Huber, W., Page`s, H., Aboyoun, P., Carlson, M., Gentleman, R., Morgan, M., and Carey, V. (2013). Software for computing and annotating genomic ranges. _PLoS Computational Biology_, 9.
+
+Leek, J. (2014). GEUVADIS Processed Data. figshare doi: http://dx.doi.org/10.6084/m9.figshare.1130849.
+
+Li, B. and Dewey, C. N. (2011). RSEM: accurate transcript quantification from RNA- seq data with or without a reference genome. _BMC Bioinformatics_, 12(1), 323.
+
+Li, W. and Jiang, T. (2012). Transcriptome assembly and isoform expression level estimation from biased RNA-seq reads. _Bioinformatics_, 28(22), 2914–2921. 
+
+McElroy, K. E., Luciani, F., and Thomas, T. (2012). GemSIM: general, error-model based simulator of next-generation sequencing data. _BMC Genomics_, 13(1), 74. 
+
+Mortazavi, A., Williams, B. A., McCue, K., Schaeffer, L., and Wold, B. (2008). Mapping and quantifying mammalian transcriptomes by RNA-seq. _Nature Methods_, 5(7), 621–628.
+
+Oshlack, A., Robinson, M. D., Young, M. D., et al. (2010). From RNA-seq reads to differential expression results. _Genome Biology_, 11(12), 220.
+
+Pages, H., Aboyoun, P., Gentleman, R., and DebRoy, S. (2014). Biostrings: String objects representing biological sequences, and matching algorithms. R package version at least 2.32.0.
+
+Paulson, J. N., Stine, O. C., Bravo, H. C., and Pop, M. (2013). Differential abundance analysis for microbial marker-gene surveys. _Nature Methods_.
+
+Risso, D., Schwartz, K., Sherlock, G., and Dudoit, S. (2011). GC-content normalization for RNA-seq data. _BMC Bioinformatics_, 12(1), 480.
+
+Robinson, M. D., McCarthy, D. J., and Smyth, G. K. (2010). edgeR: a Bioconductor package for differential expression analysis of digital gene expression data. _Bioinformatics_, 26(1), 139–140.
+
+Rohatgi, A. (2014). WebPlotDigitizer: Version 3.4 of WebPlotDigitizer.
+
+Sengupta, S., Bolin, J. M., Ruotti, V., Nguyen, B. K., Thomson, J. A., Elwell, A. L., and Stewart, R. (2011). Single read and paired end mRNA-seq Illumina libraries from 10 nanograms total RNA. _Journal of visualized experiments: JoVE_, (56). 
+
+Smyth, G. K. (2005). Limma: linear models for microarray data. In R. Gentleman, V. Carey, S. Dudoit, R. Irizarry, and W. Huber, editors, _Bioinformatics and Computational Biology Solutions Using R and Bioconductor_, pages 397–420. Springer, New York.
+
+Trapnell, C., Pachter, L., and Salzberg, S. L. (2009). TopHat: discovering splice junctions with RNA-seq. _Bioinformatics_, 25(9), 1105–1111.
+
+Trapnell, C., Williams, B. A., Pertea, G., Mortazavi, A., Kwan, G., van Baren, M. J., Salzberg, S. L., Wold, B. J., and Pachter, L. (2010). Transcript assembly and quantification by RNA-seq reveals unannotated transcripts and isoform switching during cell differentiation. _Nature Biotechnology_, 28(5), 511–515.
+
+Trapnell, C., Hendrickson, D. G., Sauvageau, M., Goff, L., Rinn, J. L., and Pachter, L. (2013). Differential analysis of gene regulation at transcript resolution with RNA-seq. _Nature Biotechnology_, 31(1), 46–53.
+
+## Reproducibility
+
+```{r sessioninfo}
+sessionInfo()
+```
