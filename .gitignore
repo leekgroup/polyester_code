@@ -18,9 +18,12 @@ ten_genes_experiment/alignments_bias/*.bam*
 ten_genes_experiment/reads/*
 ten_genes_experiment/reads_bias/*
 ten_genes_experiment/scripts_and_logs
+ten_genes_experiment/*.zip
 de_experiment/reads/*
 de_experiment/alignments/*
 figure/*
 *.rda
 GCbias.R
 NA*/*.bam*
+polyester_manuscript.md
+chr22.gtf
