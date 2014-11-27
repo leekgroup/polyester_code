@@ -13,8 +13,8 @@ genes.gtf
 polyester_manuscript_cache/*
 polyester_manuscript_files/*
 ten_genes.gtf
-ten_genes_experiment/alignments/*.bam*
-ten_genes_experiment/alignments_bias/*.bam*
+ten_genes_experiment/alignments/
+ten_genes_experiment/alignments_bias/
 ten_genes_experiment/reads/*
 ten_genes_experiment/reads_bias/*
 ten_genes_experiment/scripts_and_logs
