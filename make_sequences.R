@@ -2,6 +2,7 @@
 
 library(ballgown)
 library(polyester)
+load('fpkm.rda')
 expressed = exprfilter(fpkm, cutoff=1)
 fullgtfdf = gffRead('merged.gtf')
 fullgtfdf$t_name = getAttributeField(fullgtfdf$attributes, 'transcript_id')
