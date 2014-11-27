@@ -244,7 +244,7 @@ hr {
 <ul>
 <li>fpkm.rda (downloadable from <a href="http://files.figshare.com/1625419/fpkm.rda">figshare</a>)</li>
 <li>cov.rda (downloadable from <a href="http://files.figshare.com/1625417/cov.rda">figshare</a>)</li>
-<li>sequences.rda (available in this repository; created with <code>make_sequences.R</code>)</li>
+<li>sequences.rda (available in this repository; created by running <code>make_sequences.R</code> in this repo. You&#39;ll need <a href="https://www.dropbox.com/s/bajrp53kpa70kek/merged.gtf?dl=0">merged.gtf</a>, the GEUVADIS assembly, to run that code.)</li>
 <li>countmat.rda (available in this repository; created with <code>make_countmat.R</code>)</li>
 </ul>
 
@@ -252,14 +252,14 @@ hr {
 
 <ul>
 <li>cdna_pos_bias.csv</li>
-<li>rna_pos_bias.csv (both created based on Supplementary Figure S3 of <a href="">this paper</a> using <a href="">WebPlotDigitizer</a>)</li>
+<li>rna_pos_bias.csv (both available in this repository; both created based on Supplementary Figure S3 of <a href="http://www.ncbi.nlm.nih.gov/pubmed/23060617">this paper</a> using <a href="">WebPlotDigitizer</a>)</li>
 <li>folders prefixed with <code>NA</code> (a sample ID), containing the following files:
 
 <ul>
 <li><code>&lt;sample&gt;_accepted_hits.bam</code>, downloadable from ArrayExpress: <a href="http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA06985_accepted_hits.bam">NA06985</a>, <a href="http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA12144_accepted_hits.bam">NA12144</a>, <a href="http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA12776_accepted_hits.bam">NA12776</a>, <a href="http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA18858_accepted_hits.bam">NA18858</a>, <a href="http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20542_accepted_hits.bam">NA20542</a>, <a href="http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20772_accepted_hits.bam">NA20772</a>, <a href="http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20815_accepted_hits.bam">NA20815</a>. </li>
 <li><code>&lt;sample&gt;_accepted_hits.bam.bai</code>, created with the command <code>samtools index &lt;sample&gt;_accepted_hits.bam</code> (<a href="http://samtools.sourceforge.net/">samtools utility</a>)</li>
 <li><code>&lt;sample&gt;_metrics</code>, created with <code>make_insert_sizes.sh</code> in the main directory</li>
-<li><code>genes.fpkm_tracking</code>, <code>isoforms.fpkm_tracking</code>, <code>skipped.gtf</code>, and <code>transcripts.gtf</code>, created with the script <code>cufflinks.sh</code> in the sample&#39;s specific subdirectory [ADD THAT&ndash;GET FROM CLUSTER]</li>
+<li><code>genes.fpkm_tracking</code>, <code>isoforms.fpkm_tracking</code>, <code>skipped.gtf</code>, and <code>transcripts.gtf</code>, created with the script <code>&lt;sample&gt;_estfpkm.sh</code> in the sample&#39;s specific subdirectory.</li>
 </ul></li>
 <li>GD667.QGstats.masterfile.txt (downloadable from <a href="https://github.com/alyssafrazee/ballgown_code/tree/master/GEUVADIS_preprocessing">here</a>)</li>
 <li>A folder called <code>error_models</code> containing the files <code>ill100v4_mate1</code>, <code>ill100v4_mate2</code>, <code>ill100v4_single</code>, <code>ill100v5_mate1</code>, <code>ill100v5_mate2</code>, and <code>ill100v5_single</code></li>
