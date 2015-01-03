@@ -29,3 +29,6 @@ NA*/*.bam*
 polyester_manuscript.md
 chr22.gtf
 merged.gtf
+*.pdf
+*.png
+coverage_plots.zip
