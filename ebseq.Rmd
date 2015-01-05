@@ -1,0 +1,210 @@
+---
+title: 'Use case 1: EBSeq vs. limma'
+author: "Alyssa Frazee"
+date: "January 5, 2014"
+output: html_document
+---
+  
+Reviewer comment: _As far as I know, limma doesn’t account for the extra variability on isoform data, so it wouldn’t be an appropriate method to evaluate here (even as a proof-of-principle analysis). Therefore, I would suggest the authors to conduct the evaluations using isoform-level methods such as cuffdiff or EBSeq_
+
+Here we re-run the analysis presented in the original manuscript, but use EBSeq to find isoform-level differential expression instead of limma. The results from EBSeq are very similar to the results from limma, indicating that in this particular scenario (where isoform-level differential expression was known to exist in the data), either limma or EBSeq is an appropriate method for finding differential transcript expression.
+
+First we load in the R packages needed and read in the data (isoform-level expression estimated with Cufflinks):
+
+```{r readdata}
+library(EBSeq)
+library(limma)
+s1 = read.table(
+    'de_experiment/assemblies/large_variance/sample01/isoforms.fpkm_tracking', 
+    header=TRUE)
+transcripts = s1$tracking_id
+fpkm_large = fpkm_small = matrix(NA, nrow=length(unique(transcripts)), ncol=14)
+rn = unique(transcripts)
+rownames(fpkm_large) = rownames(fpkm_small) = transcripts 
+
+fpkm_large[,1] = s1$FPKM
+
+for(i in 1:14){
+    istring = formatC(i, width=2, format="d", flag="0") 
+    if(i>1){
+        largedat = read.table(paste0('de_experiment/assemblies/large_variance/sample', 
+            istring, '/isoforms.fpkm_tracking'), header=TRUE)
+        meas = largedat$FPKM[match(rownames(fpkm_large), largedat$tracking_id)]
+        fpkm_large[,i] = meas
+    }
+    smalldat = read.table(paste0('de_experiment/assemblies/small_variance/sample',
+        istring, '/isoforms.fpkm_tracking'), header=TRUE)
+    meas = smalldat$FPKM[match(rownames(fpkm_small), smalldat$tracking_id)]    
+    fpkm_small[,i] = meas
+}
+```
+
+Now we use these FPKM estimates to find differentially-expressed isoforms with limma:
+
+```{r limma}
+lib_adjust = apply(fpkm_large, 2, function(x){
+    quantile(log2(x+1), 0.75)
+})
+y = log2(fpkm_large+1)
+trt = rep(c(1,0), each=7)
+x = model.matrix(~ trt + lib_adjust)
+fit = lmFit(y, x)
+fit = eBayes(fit, trend=TRUE)
+pvals = fit$p.value[,2]
+qvals = p.adjust(pvals, 'fdr')
+
+siminfo = read.table('de_experiment/reads/large_variance/sim_tx_info.txt', header=TRUE)
+reallyde = siminfo[siminfo$DEstatus,]$transcriptid
+notde = siminfo[!siminfo$DEstatus,]$transcriptid
+
+qaxis = seq(0,1,by=0.01)
+sens=spec=NULL
+for(i in seq_along(qaxis)){
+    sens[i] = sum(reallyde %in% names(qvals[qvals<qaxis[i]])) / length(reallyde)
+    spec[i] = sum(notde %in% names(qvals[qvals>=qaxis[i]])) / length(notde)
+}
+
+### small variance:
+lib_adjust = apply(fpkm_small, 2, function(x){
+    quantile(log2(x+1), 0.75)
+})
+y = log2(fpkm_small+1)
+fit = lmFit(y, x)
+fit = eBayes(fit, trend=TRUE)
+pvals2 = fit$p.value[,2]
+qvals2 = p.adjust(pvals2, 'fdr')
+
+siminfo = read.table('de_experiment/reads/small_variance/sim_tx_info.txt', header=TRUE)
+reallyde = siminfo[siminfo$DEstatus,]$transcriptid
+notde = siminfo[!siminfo$DEstatus,]$transcriptid
+
+qaxis = seq(0,1,by=0.01)
+sens2 = spec2 = NULL
+for(i in seq_along(qaxis)){
+    sens2[i] = sum(reallyde %in% names(qvals2[qvals2<qaxis[i]])) / length(reallyde)
+    spec2[i] = sum(notde %in% names(qvals2[qvals2>=qaxis[i]])) / length(notde)
+}
+```
+
+And then we use the same FPKM estimates to find differentially-expressed isoforms with EBSeq:
+
+```{r ebseq}
+Conditions = rep(c('case', 'control'), each=7)
+IsoformNames = rownames(fpkm_small)
+iso_gene_relationship = read.table('de_experiment/assemblies/small_variance/sample01/isoforms.fpkm_tracking', header=TRUE, colClasses=c('character', 'NULL' ,'NULL', 'character', rep('NULL', 9)))
+iso_gene_relationship = iso_gene_relationship[match(IsoformNames, iso_gene_relationship$tracking_id),]
+sum(IsoformNames != iso_gene_relationship$tracking_id) # expect 0
+IsosGeneNames = iso_gene_relationship$gene_id
+IsoSizes = MedianNorm(fpkm_small)
+NgList = GetNg(IsoformNames, IsosGeneNames)
+IsoNgTrun = NgList$IsoformNgTrun
+# ebseq: small variance
+IsoEBOut = EBTest(Data=fpkm_small, NgVector=IsoNgTrun, 
+    Conditions=as.factor(Conditions), sizeFactors=IsoSizes, maxround=20)
+fcsmall = PostFC(IsoEBOut, SmallNum=1)
+
+# ebseq: large variance
+sum(rownames(fpkm_small) != rownames(fpkm_large)) #expect 0
+IsoSizes = MedianNorm(fpkm_large)
+IsoEBOut_large = EBTest(Data=fpkm_large, NgVector=IsoNgTrun, 
+    Conditions = as.factor(Conditions), sizeFactors=IsoSizes, maxround=20)
+fclarge = PostFC(IsoEBOut_large, SmallNum=1)
+
+ppde_large = IsoEBOut_large$PPDE
+qaxis = rev(seq(0,1,by=0.01))
+ebsens=ebspec=NULL
+for(i in seq_along(qaxis)){
+    ebsens[i] = sum(reallyde %in% names(ppde_large[ppde_large>qaxis[i]])) / length(reallyde)
+    ebspec[i] = sum(notde %in% names(ppde_large[ppde_large<=qaxis[i]])) / length(notde)
+}
+
+### small variance:
+ppde_small = IsoEBOut$PPDE
+ebsens2 = ebspec2 = NULL
+for(i in seq_along(qaxis)){
+    ebsens2[i] = sum(reallyde %in% names(ppde_small[ppde_small>qaxis[i]])) / length(reallyde)
+    ebspec2[i] = sum(notde %in% names(ppde_small[ppde_small<=qaxis[i]])) / length(notde)
+}
+```
+
+And here we add the sensitivity and specificity estimates from EBSeq to the ROC curve presented in the original manuscript (Figure 4). For limma, we vary the q-value cutoff to calculate sensitivity and specificity, and for EBSeq, we vary the posterior probability of being differentially expressed.
+
+```{r makeroc, fig.width=8, fig.height=8}
+plot(1-spec, sens, type='l', xlab='False Positive Rate',
+    ylab='True Positive Rate', col='dodgerblue', lwd=2, lty=5)
+lines(1-spec2, sens2, col='orange', lwd=2) 
+lines(1-ebspec, ebsens, col='purple', lwd=2, lty=5)
+lines(1-ebspec2, ebsens2, col='red', lwd=2)
+legend('bottomright', lty=c(5,5,1,1), lwd=2, 
+    col=c('dodgerblue','purple','orange','red'), 
+    c('limma: high variance', 'EBSeq: high variance', 'limma: low variance', 'EBSeq: low variance'))
+```
+
+Next, we re-create the density plots presented in the original manuscript (Figure 5), but add densities from the EBSeq posterior fold change estimates.
+
+
+```{r ebseq5, fig.height=6, fig.width=12}
+# limma coefficients
+coefs_small = fit$coefficients[,2]
+lib_adjust = apply(fpkm_large, 2, function(x){
+    quantile(log2(x+1), 0.75)
+})
+y = log2(fpkm_large+1)
+fit = lmFit(y, x)
+fit = eBayes(fit, trend=TRUE)
+coefs_large = fit$coefficients[,2]
+
+nonde_inds = which(names(coefs_small) %in% notde)
+up_inds = which(names(coefs_small) %in% siminfo$transcriptid[siminfo$foldchange>1])
+down_inds = which(names(coefs_small) %in% siminfo$transcriptid[siminfo$foldchange<1])
+stopifnot(sum(names(coefs_small) != names(coefs_large)) == 0)
+mean(coefs_large[up_inds])
+mean(coefs_large[down_inds])
+mean(coefs_small[up_inds]) 
+mean(coefs_small[down_inds])
+
+par(mfrow=c(1,2))
+plot(density(coefs_large[nonde_inds]), col='blue', lwd=2,
+    xlab='Fitted Coefficient (log scale)', ylim=c(0, 0.65),
+    main='(a) Large variance scenario', xlim=c(-6, 9))
+lines(density(coefs_large[up_inds]), col='deepskyblue', lwd=2)
+lines(density(coefs_large[down_inds]), col='navy', lwd=2)
+
+coefs_large = fclarge$PostFC
+nonde_inds = which(names(coefs_large) %in% notde)
+up_inds = which(names(coefs_large) %in% siminfo$transcriptid[siminfo$foldchange>1])
+down_inds = which(names(coefs_large) %in% siminfo$transcriptid[siminfo$foldchange<1])
+mean(log2(coefs_large[up_inds]))
+mean(log2(coefs_large[down_inds]))
+
+lines(density(log2(coefs_large[nonde_inds])), col='blue', lwd=2, lty=3)
+lines(density(log2(coefs_large[up_inds])), col='deepskyblue', lwd=2, lty=3)
+lines(density(log2(coefs_large[down_inds])), col='navy', lwd=2, lty=3)
+legend('topright', c('underexpressed', 'not DE', 'overexpressed', 'limma', 'EBSeq'),
+    col=c('navy','blue','deepskyblue','gray','gray'), lwd=2, lty=c(1,1,1,1,3), cex=0.5)
+
+nonde_inds = which(names(coefs_small) %in% notde)
+up_inds = which(names(coefs_small) %in% siminfo$transcriptid[siminfo$foldchange>1])
+down_inds = which(names(coefs_small) %in% siminfo$transcriptid[siminfo$foldchange<1])
+plot(density(coefs_small[nonde_inds]), col='blue', lwd=2,
+    xlab='Fitted Coefficient (log scale)', ylim=c(0, 4),
+    main='(b) Small variance scenario', xlim=c(-6, 9))
+lines(density(coefs_small[up_inds]), col='deepskyblue', lwd=2)
+lines(density(coefs_small[down_inds]), col='navy', lwd=2)
+
+fcsmall = PostFC(IsoEBOut, SmallNum=1)
+coefs_small = fcsmall$PostFC
+nonde_inds = which(names(coefs_small) %in% notde)
+up_inds = which(names(coefs_small) %in% siminfo$transcriptid[siminfo$foldchange>1])
+down_inds = which(names(coefs_small) %in% siminfo$transcriptid[siminfo$foldchange<1])
+mean(log2(coefs_small[up_inds]))
+mean(log2(coefs_small[down_inds]))
+
+lines(density(log2(coefs_small[nonde_inds])), col='blue', lwd=2, lty=3)
+lines(density(log2(coefs_small[up_inds])), col='deepskyblue', lwd=2, lty=3)
+lines(density(log2(coefs_small[down_inds])), col='navy', lwd=2, lty=3)
+legend('topright', c('underexpressed', 'not DE', 'overexpressed', 'limma', 'EBSeq'),
+    col=c('navy','blue','deepskyblue','gray','gray'), lwd=2, lty=c(1,1,1,1,3), cex=0.5)
+```
+
+
