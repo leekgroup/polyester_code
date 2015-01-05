@@ -27,6 +27,7 @@ _From Bioconductor_:
 * GenomicAlignments
 * IRanges
 * limma
+* EBSeq
 
 _From GitHub_:
 * [RSkittleBrewer](https://github.com/alyssafrazee/RSkittleBrewer)
@@ -715,8 +716,7 @@ legend(158600000, 600, col=c('black','blue','deeppink'),
 maindir = 'coverage_plots'
 for(samp in 1:7){
     for(gene in unique(unlist(genes))){
-        pdf(paste0(maindir, '/', strip_quotes(gene), '_sample',samp,'.pdf'),
-            height=6, width=12)
+        pdf(paste0(maindir, '/', strip_quotes(gene), '_sample',samp,'.pdf'), height=6, width=12)
         trackplot(gene, samp)
         legend('topleft', col=c('black','blue','deeppink'), 
             c('GEUVADIS', 'simulated uniform', 'simulated rnaf bias'), lty=1)
@@ -883,7 +883,7 @@ siminfo = read.table('de_experiment/reads/small_variance/sim_tx_info.txt', heade
 reallyde = siminfo[siminfo$DEstatus,]$transcriptid
 notde = siminfo[!siminfo$DEstatus,]$transcriptid
 
-qaxis = seq(0,1,by=0.01)
+qaxis = rev(seq(0,1,by=0.01))
 sens2 = spec2 = NULL
 for(i in seq_along(qaxis)){
     sens2[i] = sum(reallyde %in% names(qvals2[qvals2<qaxis[i]])) / length(reallyde)
