@@ -1,0 +1,213 @@
+---
+title: 'Use case 2: Estimating baseline expression and fold changes from real data'
+author: "Alyssa Frazee"
+date: "January 7, 2015"
+output: pdf_document
+---
+
+Here we demonstrate a use case for Polyester where the means, variances, and fold changes of the transcripts in the experiment are estimated from real data.
+
+You will need to run `polyester_manuscript.Rmd` (the original manuscript) first in order to get some of the dependencies for this code. You will also need to download a few more GEUVADIS BAM files (in addition to the ones needed for `polyester_manuscript.Rmd`. All needed files are listed below):
+ 
+* [NA06985_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA06985_accepted_hits.bam)
+* [NA12144_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA12144_accepted_hits.bam)
+* [NA12776_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA12776_accepted_hits.bam)
+* [NA12778_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA12778_accepted_hits.bam)
+* [NA07048_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA07048_accepted_hits.bam)
+* [NA12760_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA12760_accepted_hits.bam)
+* [NA12889_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA12889_accepted_hits.bam)
+* [NA20542_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20542_accepted_hits.bam)
+* [NA20772_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20772_accepted_hits.bam)
+* [NA20815_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20815_accepted_hits.bam)
+* [NA20761_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20761_accepted_hits.bam)
+* [NA20798_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20798_accepted_hits.bam)
+* [NA20518_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20518_accepted_hits.bam)
+* [NA20532_accepted_hits.bam](http://www.ebi.ac.uk/arrayexpress/files/E-GEUV-6/NA20532_accepted_hits.bam)
+
+You will need to run Cufflinks on these BAM files. You can do this with `cufflinks_pre_estimation.sh` in the `data_sim` folder.
+
+First we get everything set up and read in the Chromosome 22 transcript abundances estimated with Cufflinks for the GEUVADIS data set.
+
+```{r load, warning=FALSE, message=FALSE}
+library(polyester)
+library(ballgown)
+library(GenomicRanges)
+library(limma)
+library(EBSeq)
+
+gtfpath = 'chr22.gtf'
+seqpath = 'Homo_sapiens/UCSC/hg19/Sequence/Chromosomes'
+ceusamps = c('NA06985', 'NA12144', 'NA12776', 'NA12778', 'NA07048', 'NA12760', 'NA12889')
+tsisamps = c('NA20542', 'NA20772', 'NA20815', 'NA20761', 'NA20798', 'NA20518', 'NA20532')
+allsamps = c(ceusamps, tsisamps)
+m1 = read.table('data_sim/abundances/NA06985/isoforms.fpkm_tracking', header=TRUE)
+ntx = nrow(m1)
+n = length(allsamps)
+fpkmMat = matrix(NA, nrow=ntx, ncol=length(ceusamps)+length(tsisamps))
+rownames(fpkmMat) = m1$tracking_id
+for(i in seq_along(allsamps)){
+    m1 = read.table(paste0('data_sim/abundances/', allsamps[i], '/isoforms.fpkm_tracking'), header=TRUE)
+    o = match(rownames(fpkmMat), m1$tracking_id)
+    stopifnot(all(m1$trackingid[o] == rownames(fpkmMat)))
+    fpkmMat[,i] = m1$FPKM[o]
+}
+colnames(fpkmMat) = allsamps
+```
+
+We will need the transcript lengths in order to get counts from FPKM measurements:
+
+```{r tlen}
+annot = gffReadGR('chr22.gtf', splitByTranscript=TRUE)
+names(annot) = substr(names(annot), 2, nchar(names(annot))-1)
+transcript_lengths = sapply(width(annot), sum)
+o = match(rownames(fpkmMat), names(annot))
+transcript_lengths = transcript_lengths[o]
+```
+
+I updated Polyester's `fpkm_to_counts` function to accept a matrix rather than a ballgown object. This change has been incorporated into the devel version of Polyester.
+
+```{r newfunc}
+fpkm_to_counts = function(bg=NULL, mat=NULL, tlengths=NULL, mean_rps=100e6, threshold=0){
+    if(is.null(mat)){
+        tmeas = as.matrix(ballgown::texpr(bg, 'FPKM'))
+        tlengths = sapply(width(ballgown::structure(bg)$trans), sum)
+    }else{
+        tmeas = mat
+        stopifnot(!is.null(tlengths))
+    }
+    index1 = which(rowMeans(tmeas) >= threshold)
+    tlengths = tlengths[index1]
+    counts = tlengths*tmeas[index1,]/1000
+    counts = round(counts*mean_rps/1e6)
+    return(counts)    
+}
+```
+
+Next we take the GEUVADIS FPKM data, convert it into transcript counts, and calculate the "true" fold change for each isoform in the sample. Expression fold changes were calculated between CEU (Europeans living in Utah) and TSI (Tuscans in Italy) populations.
+
+```{r fc}
+countmat = fpkm_to_counts(mat=fpkmMat, tlengths=transcript_lengths, mean_rps=5e6)
+logcountmat = log2(countmat+1)
+pop = rep(c('ceu', 'tsi'), each=7)
+x = model.matrix(~pop)
+fit = lmFit(logcountmat, x)
+truebetas = 2^(fit$coefficients[,2])
+```
+
+We (arbitrarily) will consider a transcript "truly" differentially expressed if its fold change between the populations is above 1.5, in either direction.
+
+```{r setde}
+isDE = truebetas > 1.5 | truebetas < 0.67
+sim_info = data.frame(transcript_id = names(truebetas), fc=as.numeric(truebetas), isDE=isDE)
+write.table(sim_info, quote=FALSE, row.names=FALSE, sep='\t', file='sim_info.txt')
+```
+
+Cufflinks didn't estimate the abundances for one of the annotated transcripts, so we add a zero row to the count matrix.
+
+```{r clean}
+countmat = rbind(countmat, rep(0, ncol(countmat)))
+rownames(countmat)[926] = 'NR_073460_2'
+```
+
+Next we put the count matrix in the same order as the annotated transripts will be read in the call to `simulate_experiment_countmat`. 
+
+```{r ordmat}
+tt = seq_gtf(gtfpath, seqpath)
+names(tt) = substr(names(tt), 2, nchar(names(tt))-1)
+o = match(names(tt), rownames(countmat))
+countmat = countmat[o,]
+```
+
+Finally we simulate reads based on the count matrix we derived from the GEUVADIS data:
+
+```{r sim, eval=FALSE}
+simulate_experiment_countmat(gtf=gtfpath, seqpath=seqpath, readmat=countmat,
+    outdir='reads', seed=4831)
+```
+
+Next, we'll need to process these reads to get simulated abundance estimates. You can do this with the `tophat.sh` and `cufflinks_post_estimation.sh` scripts in the `data_sim` folder. The rest of this code relies on the outputs of these scripts.
+
+After processing the simulated data, we read in the estimated FPKMs from the simulation:
+
+```{r simmat}
+fpkmMatSim = matrix(NA, nrow=nrow(fpkmMat), ncol=n)
+m1 = read.table('data_sim/abundances_post/sample01/isoforms.fpkm_tracking', header=TRUE)
+rownames(fpkmMatSim) = m1$tracking_id
+for(i in 1:14){
+    m1 = read.table(paste0('data_sim/abundances_post/sample', sprintf('%02d', i), '/isoforms.fpkm_tracking'), header=TRUE)
+    o = match(rownames(fpkmMatSim), m1$tracking_id)
+    stopifnot(all(m1$trackingid[o] == rownames(fpkmMatSim)))
+    fpkmMatSim[,i] = m1$FPKM[o]
+}
+
+o = match(rownames(fpkmMat), rownames(fpkmMatSim))
+fpkmMatSim = fpkmMatSim[o,]
+```
+
+Now we can correlate the estimated FPKMs from the simulated data with the FPKMs that were used to generate the count matrix in the first place. 
+
+```{r cors1}
+sapply(1:14, function(i) cor(fpkmMat[,i], fpkmMatSim[,i]))
+```
+
+The correlations are positive, but some are much stronger than others. Basic plots of the correlations make it clear that there are a few transcripts with extremely high estimated FPKMs in the simulated data, and those high correlations really bring the correlations down. Removing 5 outlying transcripts shows that the other 920 transcripts have very strong correlations between the real data used to generate the count matrix and the simulated FPKMs. Below we show the correlations: each box representes 14 correlations, from the 14 replicates, where each correlation is calculated between the real and simulated FPKMs for the Chromosome 22 transcripts.
+
+```{r nooutliers, fig.width=5, fig.height=5}
+outliers = c(725, 204, 842, 843, 580)
+outlier_cors = sapply(1:14, function(i) cor(fpkmMat[,i], fpkmMatSim[,i]))
+no_outlier_cors = sapply(1:14, function(i) cor(fpkmMat[-outliers, i], fpkmMatSim[-outliers, i]))
+hasoutliers = rep(c('outliers', 'no outliers'), each=14)
+boxplot(c(outlier_cors, no_outlier_cors) ~ hasoutliers, boxwex=0.5, col='gray', ylab='Correlation')
+```
+
+So we have shown that true and simulated FPKMs correlate with each other, which we also show in the main manuscript. We will now show that the estimated differential expression fold changes correlate between the real and simulated data, and that you can use Polyester to evaluate statistial methods for differential expression. Below we estimate differential expression status and fold change between the two populations (CEU/TSI) using EBSeq:
+
+```{r ebseq, fig.width=5, fig.height=5}
+Conditions = rep(c('CEU', 'TSI'), each=7)
+IsoformNames = rownames(fpkmMatSim)
+iso_gene_relationship = read.table('data_sim/abundances_post/sample01/isoforms.fpkm_tracking', header=TRUE, colClasses=c('character', 'NULL' ,'NULL', 'character', rep('NULL', 9)))
+iso_gene_relationship = iso_gene_relationship[match(IsoformNames, iso_gene_relationship$tracking_id),]
+sum(IsoformNames != iso_gene_relationship$tracking_id) # expect 0
+IsosGeneNames = iso_gene_relationship$gene_id
+IsoSizes = MedianNorm(fpkmMatSim)
+NgList = GetNg(IsoformNames, IsosGeneNames)
+IsoNgTrun = NgList$IsoformNgTrun
+IsoEBOut = EBTest(Data=fpkmMatSim, NgVector=IsoNgTrun, 
+    Conditions=as.factor(Conditions), sizeFactors=IsoSizes, maxround=20)
+fold_changes = PostFC(IsoEBOut, SmallNum=1)
+fold_changes$Direction #CEU over TSI, so need to flip (CEU was reference in my estimate of "true" fold change)
+
+o = match(names(fold_changes$PostFC), sim_info$transcript_id)
+true_fc = 1/sim_info$fc[o]
+sum(sim_info$transcript_id[o] != names(fold_changes$PostFC))
+plot(log2(true_fc), log2(fold_changes$PostFC), xlab='True fold change', ylab='EBSeq estimated fold change', main='True vs. Estimated Fold Changes (log2 scale)')
+cor(log2(true_fc), log2(fold_changes$PostFC))
+```
+
+So the estimated fold changes are correlated with the fold changes we observed in the data from which we generated the count matrix.
+
+Finally we show that you can make an ROC curve based on this simulation, where true differential expression status is known. Recall that earlier we defined "true" differential expression as transcripts with a fold change of more than 1.5 between populations, in either direction.
+
+```{r roc, fig.height=5, fig.width=5}
+reallyde = sim_info[sim_info$isDE,]$transcript_id
+notde = sim_info[!sim_info$isDE,]$transcript_id
+ppde = IsoEBOut$PPDE
+sens = spec = NULL
+qaxis = rev(seq(0,1,by=0.01))
+for(i in seq_along(qaxis)){
+    sens[i] = sum(reallyde %in% names(ppde[ppde>qaxis[i]])) / length(reallyde)
+    spec[i] = sum(notde %in% c(names(ppde[ppde<=qaxis[i]]), setdiff(notde, names(ppde)))) / length(notde)
+}
+sens[i+1] = 1
+spec[i+1] = 0
+
+plot(1-spec, sens, xlab='False Positive Rate', ylab='True Positive Rate', main='ROC Curve', xlim=c(0,1), ylim=c(0,1), type='l', lwd=2, col='purple')
+
+```
+
+This analysis illustrates the use of Polyester to simulate data with known FPKM, fold changes between groups, and differential expression status between groups, using simulated transcript abundances based on real data.
+
+## for reproducibility
+```{r info}
+sessionInfo()
+```
