@@ -36,3 +36,6 @@ Homo_sapiens
 sim_info.txt
 data_sim/abundances
 data_sim/abundances_post
+length_sim/abundances
+length_sim/reads
+length_simulation.md
