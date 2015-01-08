@@ -12,4 +12,9 @@ library(knitr)
 knit2html('polyester_manuscript.Rmd')
 ```
 
+The paper also includes three small analyses as supplements. The`.Rmd` files with code in them and corresponding rendered html are in this repository. You can view the supplements at these links:
+
+* `ebseq.Rmd`: [rendered html](http://htmlpreview.github.io/?https://github.com/alyssafrazee/polyester_code/blob/master/ebseq.html)
+* `dataDrivenEst.Rmd`: [rendered html](http://htmlpreview.github.io/?https://github.com/alyssafrazee/polyester_code/blob/master/dataDrivenEst.html)
+* `length_simulation.Rmd`: [rendered html](http://htmlpreview.github.io/?https://github.com/alyssafrazee/polyester_code/blob/master/length_simulation.html)
 
