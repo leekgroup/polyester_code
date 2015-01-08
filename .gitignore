@@ -32,3 +32,7 @@ merged.gtf
 *.pdf
 *.png
 coverage_plots.zip
+Homo_sapiens
+sim_info.txt
+data_sim/abundances
+data_sim/abundances_post
