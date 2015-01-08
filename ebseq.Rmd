@@ -115,7 +115,7 @@ qaxis = rev(seq(0,1,by=0.01))
 ebsens=ebspec=NULL
 for(i in seq_along(qaxis)){
     ebsens[i] = sum(reallyde %in% names(ppde_large[ppde_large>qaxis[i]])) / length(reallyde)
-    ebspec[i] = sum(notde %in% names(ppde_large[ppde_large<=qaxis[i]])) / length(notde)
+    ebspec[i] = sum(notde %in% c(names(ppde_large[ppde_large<=qaxis[i]]), setdiff(notde, names(ppde_large)))) / length(notde)
 }
 
 ### small variance:
@@ -123,7 +123,7 @@ ppde_small = IsoEBOut$PPDE
 ebsens2 = ebspec2 = NULL
 for(i in seq_along(qaxis)){
     ebsens2[i] = sum(reallyde %in% names(ppde_small[ppde_small>qaxis[i]])) / length(reallyde)
-    ebspec2[i] = sum(notde %in% names(ppde_small[ppde_small<=qaxis[i]])) / length(notde)
+    ebspec2[i] = sum(notde %in% c(names(ppde_small[ppde_small<=qaxis[i]]), setdiff(notde, names(ppde_small)))) / length(notde)
 }
 ```
 
@@ -207,4 +207,7 @@ legend('topright', c('underexpressed', 'not DE', 'overexpressed', 'limma', 'EBSe
     col=c('navy','blue','deepskyblue','gray','gray'), lwd=2, lty=c(1,1,1,1,3), cex=0.5)
 ```
 
-
+## for reproducibility:
+```{r repro}
+sessionInfo()
+```
