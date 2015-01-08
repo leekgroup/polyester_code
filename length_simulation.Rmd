@@ -1,0 +1,230 @@
+---
+title: 'Use Case 3: Modeling relationship between transcript length and simulated
+  read count'
+author: "Alyssa Frazee"
+date: "January 8, 2015"
+output: pdf_document
+---
+
+In this example use of Polyester, we estimate the relationship between transcript length and number of reads originating from it using a real data set. We use the same data set we used in `dataDrivenEst.Rmd`. 
+
+First we read in the FPKMs from chromosome 22 for the GEUVADIS data set.
+
+```{r loadsetup, warning=FALSE, message=FALSE}
+library(polyester)
+library(ballgown)
+library(GenomicRanges)
+library(EBSeq)
+
+gtfpath = 'chr22.gtf'
+seqpath = 'Homo_sapiens/UCSC/hg19/Sequence/Chromosomes'
+ceusamps = c('NA06985', 'NA12144', 'NA12776', 'NA12778', 'NA07048', 'NA12760', 'NA12889')
+tsisamps = c('NA20542', 'NA20772', 'NA20815', 'NA20761', 'NA20798', 'NA20518', 'NA20532')
+allsamps = c(ceusamps, tsisamps)
+m1 = read.table('data_sim/abundances/NA06985/isoforms.fpkm_tracking', header=TRUE)
+ntx = nrow(m1)
+n = length(allsamps)
+fpkmMat = matrix(NA, nrow=ntx, ncol=length(ceusamps)+length(tsisamps))
+rownames(fpkmMat) = m1$tracking_id
+for(i in seq_along(allsamps)){
+    m1 = read.table(paste0('data_sim/abundances/', allsamps[i], '/isoforms.fpkm_tracking'), header=TRUE)
+    o = match(rownames(fpkmMat), m1$tracking_id)
+    stopifnot(all(m1$trackingid[o] == rownames(fpkmMat)))
+    fpkmMat[,i] = m1$FPKM[o]
+}
+colnames(fpkmMat) = allsamps
+```
+
+Then we read in the lengths of the Chromosome 22 transcripts:
+
+```{r tlen}
+annot = gffReadGR('chr22.gtf', splitByTranscript=TRUE)
+names(annot) = substr(names(annot), 2, nchar(names(annot))-1)
+transcript_lengths = sapply(width(annot), sum)
+o = match(rownames(fpkmMat), names(annot))
+transcript_lengths = transcript_lengths[o]
+```
+
+Then we estimate the number of reads originating from each transcript using the definition of FPKM.
+
+```{r getcounts}
+fpkm_to_counts = function(bg=NULL, mat=NULL, tlengths=NULL, mean_rps=100e6, threshold=0){
+    if(is.null(mat)){
+        tmeas = as.matrix(ballgown::texpr(bg, 'FPKM'))
+        tlengths = sapply(width(ballgown::structure(bg)$trans), sum)
+    }else{
+        tmeas = mat
+        stopifnot(!is.null(tlengths))
+    }
+    index1 = which(rowMeans(tmeas) >= threshold)
+    tlengths = tlengths[index1]
+    counts = tlengths*tmeas[index1,]/1000
+    counts = round(counts*mean_rps/1e6)
+    return(counts)    
+}
+
+countmat = fpkm_to_counts(mat=fpkmMat, tlengths=transcript_lengths, mean_rps=5e7)
+```
+
+Cufflinks didn't estimate the abundances for one of the annotated transcripts, so we add a zero row to the count matrix.
+
+```{r fixcountmat}
+countmat = rbind(countmat, rep(0, ncol(countmat)))
+rownames(countmat)[926] = 'NR_073460_2'
+transcript_lengths[926] = sapply(width(annot), sum)['NR_073460_2']
+```
+
+Now we can explore the relationship between transcript length and number of reads originating from it. We first looked at all counts from all replicates individually, and then examined the relationship between transcript length and average transcript count across the 14 replicates. The final model predicts the log of the mean transcript count as a linear function of the log of the transcript's length.
+
+
+```{r model}
+l = rep(transcript_lengths, ncol(countmat))
+count = as.vector(countmat)
+plot(l, count)
+plot(l, log(count))
+plot(log(l), log(count+1))
+scatter.smooth(log(l), log(count+1), col='gray50')
+cor(l, count)
+cor(log(l), log(count+1))
+
+plot(transcript_lengths, rowMeans(countmat))
+plot(transcript_lengths, log(rowMeans(countmat)+1))
+plot(log2(transcript_lengths), log2(rowMeans(countmat)+1))
+scatter.smooth(log2(transcript_lengths), log2(rowMeans(countmat)+1), col='gray40', xlab='log2 transcript length', ylab='log2 average transcript count')
+
+# model using the row mean (don't have to worry about transcript correlation)
+y = log2(rowMeans(countmat)+1)
+x = log2(transcript_lengths)
+model = lm(y~x)
+summary(model)
+sigma = summary(model)$sigma
+
+o = order(transcript_lengths)
+lines(log2(transcript_lengths)[o], predict(model)[o], col='red')
+legend('topleft', col=c('red', 'black'), lty=1, c('linear model fit', 'loess smoother'))
+```
+
+Now for our simulation, for each transcript, we will draw its mean count from the normal distribution specified by this model. Then we will draw replicate counts from a negative binomial distribution that mean.
+
+```{r getbasemeans}
+logmus = predict(model)
+mus = 2^logmus - 1
+set.seed(500)
+basemeans = rnorm(nrow(countmat), mus, sigma)
+basemeans[basemeans<1] = 1
+basemeans = round(basemeans)
+summary(basemeans)
+```
+
+We should now make sure our mean estimates are in the same order our transcripts will be in during the simulation:
+
+```{r getorder}
+seqpath = 'Homo_sapiens/UCSC/hg19/Sequence/Chromosomes'
+tt = seq_gtf('chr22.gtf', seqpath)
+names(tt) = substr(names(tt), 2, nchar(names(tt))-1)
+o = match(names(tt), rownames(countmat))
+basemeans = basemeans[o]
+```
+
+Finally, we simulate an experiment with these baseline means, assuming constant size parameter (8) across transcripts (so, quadratic mean/variance relationship), and some differential expression signal.
+
+```{r simulate, eval=FALSE}
+fc = rep(1, nrow(countmat))
+set.seed(2041)
+de = sample(1:length(fc), 200)
+fc[de[1:100]] = 3
+fc[de[101:200]] = 1/3
+simulate_experiment(gtf='chr22.gtf', seqpath=seqpath, num_reps=7, reads_per_transcript=basemeans, size=8, outdir='./length_sim/reads', fold_changes=fc)
+```
+
+Here is where we do the preprocessing: run `tophat.sh` and `cufflinks.sh` to align the simulated reads and get estimated transcript abundances.
+
+After processing the simulated reads, we read in the simulated FPKMs and find the differential expression with EBSeq:
+
+```{r analyze}
+fpkmMatSim = matrix(NA, nrow=nrow(fpkmMat), ncol=n)
+m1 = read.table('length_sim/abundances/sample01/isoforms.fpkm_tracking', header=TRUE)
+rownames(fpkmMatSim) = m1$tracking_id
+for(i in 1:14){
+    m1 = read.table(paste0('length_sim/abundances/sample', sprintf('%02d', i), '/isoforms.fpkm_tracking'), header=TRUE)
+    o = match(rownames(fpkmMatSim), m1$tracking_id)
+    stopifnot(all(m1$trackingid[o] == rownames(fpkmMatSim)))
+    fpkmMatSim[,i] = m1$FPKM[o]
+}
+
+o = match(rownames(fpkmMat), rownames(fpkmMatSim))
+fpkmMatSim = fpkmMatSim[o,]
+
+Conditions = rep(c('case', 'control'), each=7)
+IsoformNames = rownames(fpkmMatSim)
+iso_gene_relationship = read.table('length_sim/abundances/sample01/isoforms.fpkm_tracking', header=TRUE, colClasses=c('character', 'NULL' ,'NULL', 'character', rep('NULL', 9)))
+iso_gene_relationship = iso_gene_relationship[match(IsoformNames, iso_gene_relationship$tracking_id),]
+sum(IsoformNames != iso_gene_relationship$tracking_id) # expect 0
+IsosGeneNames = iso_gene_relationship$gene_id
+IsoSizes = MedianNorm(fpkmMatSim)
+NgList = GetNg(IsoformNames, IsosGeneNames)
+IsoNgTrun = NgList$IsoformNgTrun
+IsoEBOut = EBTest(Data=fpkmMatSim, NgVector=IsoNgTrun, 
+    Conditions=as.factor(Conditions), sizeFactors=IsoSizes, maxround=20)
+fold_changes = PostFC(IsoEBOut, SmallNum=1)
+fold_changes$Direction 
+sim_info = read.table('length_sim/reads/sim_info.txt', header=TRUE)
+o = match(names(fold_changes$PostFC), sim_info$transcriptid)
+sum(sim_info$transcript_id[o] != names(fold_changes$PostFC))
+true_fc = sim_info$foldchange[o]
+```
+
+Here we make a density plot similar to Figure 5 in the main manuscript, showing that the set fold changes can be recovered:
+
+```{r densities, fig.width=10, fig.height=5}
+notde = sim_info$transcriptid[!sim_info$DEstatus]
+nonde_inds = which(sim_info$transcriptid[o] %in% notde)
+up_inds = which(sim_info$transcriptid[o] %in% sim_info$transcriptid[sim_info$foldchange>1])
+down_inds = which(sim_info$transcriptid[o] %in% sim_info$transcriptid[sim_info$foldchange<1])
+
+fc = log2(fold_changes$PostFC)
+plot(density(fc[nonde_inds]), col='blue', lwd=2, xlab='Fitted Coefficient (log scale)',
+    main='fold change distributions', xlim=c(-3, 3), ylim=c(0,1.4))
+lines(density(fc[up_inds]), col='deepskyblue', lwd=2, lty=5)
+lines(density(fc[down_inds]), col='navy', lwd=2, lty=6)
+legend('topright', c('underexpressed', 'not DE', 'overexpressed'),
+    col=c('navy', 'blue', 'deepskyblue'), lwd=2, lty=c(6,1,5),cex=0.5)
+```
+
+And finally, we can also make an ROC curve to recover differential expression in this scenario.
+
+```{r roc, fig.height=5, fig.width=5}
+reallyde = sim_info[sim_info$DEstatus,]$transcriptid
+notde = sim_info[!sim_info$DEstatus,]$transcriptid
+ppde = IsoEBOut$PPDE
+sens = spec = NULL
+qaxis = rev(seq(0,1,by=0.01))
+for(i in seq_along(qaxis)){
+    sens[i] = sum(reallyde %in% names(ppde[ppde>qaxis[i]])) / length(reallyde)
+    spec[i] = sum(notde %in% c(names(ppde[ppde<=qaxis[i]]), setdiff(notde, names(ppde)))) / length(notde)
+}
+sens[i+1] = 1
+spec[i+1] = 0
+
+plot(1-spec, sens, xlab='False Positive Rate', ylab='True Positive Rate', main='ROC Curve', xlim=c(0,1), ylim=c(0,1), type='l', lwd=2, col='purple')
+```
+
+In this experiment, EBSeq was easily able to correctly recover differentially expressed transcripts.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
