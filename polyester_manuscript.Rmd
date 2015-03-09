@@ -534,7 +534,13 @@ trackplot = function(gene, sampleind){
     gene1 = unlist(tx[gene_inds])
     strand = as.character(unique(strand(gene1)))
     mcols(gene1) = NULL
-    param = ScanBamParam(which=gene1, flag=myflag)
+    
+    ## To avoid counting reads multiple times
+    ## See https://stat.ethz.ch/pipermail/bioc-devel/2015-February/006978.html
+    ## Adds some padding to the gene to avoid missing most reads that map a
+    ## long distance away
+    gene_region = resize(range(gene1), width = width(range(gene1)) + 2e5, fix = 'center')
+    param = ScanBamParam(which=gene_region, flag=myflag)
     alignments = readGAlignments(bf[sampleind], param=param)
     plot_xlim = c(min(start(gene1))-20, max(end(gene1))+20)
     xax = plot_xlim[1]:plot_xlim[2]
@@ -559,7 +565,8 @@ trackplot = function(gene, sampleind){
     covrlelist3 = coverage(simaln_bias)
     simcov_bias = covrlelist3[[which(names(covrlelist3) == chr)]][xax]
 
-    ymax = max(c(covtrack, simcov, simcov_bias))
+    ## Adds some space for legend
+    ymax = max(c(covtrack, simcov, simcov_bias)) * 1.15
     transcript_width = round(ymax/4)
     isoforms = tx[gene_inds]
     ymin = -length(gene_inds)*transcript_width - transcript_width
@@ -569,7 +576,7 @@ trackplot = function(gene, sampleind){
         xlab=paste0('genomic position, ',chr), ylim=c(ymin, ymax), yaxt='n',) # y label needs to move up a bit
     lines(xax, simcov_bias, col='deeppink')
     lines(xax, covtrack, col='black')
-    axis(side=2, at=pretty(0:ymax), labels=as.character(pretty(0:ymax)))
+    axis(side=2, at=pretty(0:ymax), labels=as.character(pretty(0:ymax)), las = 2)
 
     for(txind in seq_along(isoforms)){
         trx = isoforms[[txind]]
@@ -594,7 +601,7 @@ trackplot = function(gene, sampleind){
     if(strand=='+'){
       text(x=(xax[1]+xax[length(xax)])/2, y=-(txind+1)*transcript_width, "transcription: 5' --> 3'")
     }else{
-      text(x=(xax[1]+xax[length(xax)])/2, y=-(txind+1)*transcript_width, "transcriptio: 3' <-- 5'")
+      text(x=(xax[1]+xax[length(xax)])/2, y=-(txind+1)*transcript_width, "transcription: 3' <-- 5'")
     }
 }
 ```
@@ -608,7 +615,9 @@ gene_inds = which(genes == gene)
 gene1 = unlist(tx[gene_inds])
 strand = unique(strand(gene1))
 mcols(gene1) = NULL
-param = ScanBamParam(which=gene1, flag=myflag)
+
+gene_region <- resize(range(gene1), width = width(range(gene1)) + 2e5, fix = 'center')
+param = ScanBamParam(which=gene_region, flag=myflag)
 alignments = readGAlignments(bf[sampleind], param=param)
 plot_xlim = c(min(start(gene1))-20, max(end(gene1))+20)
 xax = plot_xlim[1]:plot_xlim[2]
@@ -618,29 +627,25 @@ ind = which(names(covrlelist) == chr)
 covtrack = covrlelist[[ind]][xax]
 
 # find the giant intron
-bigstart = which.max(runLength(covtrack))
-iwidth = max(runLength(covtrack))
-istart = sum(runLength(covtrack)[1:(bigstart-1)])
-covtmp_black = covtrack
-runLength(covtmp_black)[bigstart] = runLength(covtmp_black)[bigstart]-(iwidth-500)
+iwidth = 13327
+istart = 902
+covtmp_black = covtrack[-(istart:(istart + iwidth - 500 - 1))]
 
 simfile = paste0('ten_genes_experiment/alignments/sample0',
     sampleind, '_accepted_hits.bam')
 simalignments = readGAlignments(simfile, param=param)
 covrlelist2 = coverage(simalignments)
 simcov = covrlelist2[[which(names(covrlelist2) == chr)]][xax]
-covtmp_blue = simcov
-runLength(covtmp_blue)[which.max(runLength(covtmp_blue))] = runLength(covtmp_blue)[which.max(runLength(covtmp_blue))]-(iwidth-500)
+covtmp_blue = simcov[-(istart:(istart + iwidth - 500 - 1))]
 
 simfile_bias = paste0('ten_genes_experiment/alignments_bias/sample0',
     sampleind, '_accepted_hits.bam')
 simaln_bias = readGAlignments(simfile_bias, param=param)
 covrlelist3 = coverage(simaln_bias)
 simcov_bias = covrlelist3[[which(names(covrlelist3) == chr)]][xax]
-covtmp_pink = simcov_bias
-runLength(covtmp_pink)[which.max(runLength(covtmp_pink))] = runLength(covtmp_pink)[which.max(runLength(covtmp_pink))]-(iwidth-500)
+covtmp_pink = simcov_bias[-(istart:(istart + iwidth - 500 - 1))]
 
-txtmp = tx[c(1,5,8)]
+txtmp = tx[unique(names(gene1))]
 txtmp = lapply(txtmp, function(x){
     ret = x
     start(ret)[3:5] = start(ret)[3:5]-(iwidth-500)
@@ -654,7 +659,7 @@ txtmp = lapply(txtmp, function(x){
     return(ret)
 })
 
-ymax = max(c(covtmp_black, covtmp_blue, covtmp_pink))
+ymax = max(c(covtmp_black, covtmp_blue, covtmp_pink)) * 1.15
 transcript_width = round(ymax/4)
 isoforms = txtmp
 ymin = -length(gene_inds)*transcript_width - transcript_width
@@ -664,7 +669,7 @@ plot(covtmp_blue, type='l', col='blue', ylab='',
     xlab='genomic position, chr6', ylim=c(ymin, ymax), yaxt='n', xaxt='n')
 lines(covtmp_pink, col='deeppink')
 lines(covtmp_black, col='black')
-axis(side=2, at=pretty(0:ymax), labels=as.character(pretty(0:ymax)))
+axis(side=2, at=pretty(0:ymax), labels=as.character(pretty(0:ymax)), las = 2)
 intron_start_ind = which(xax == 14118297)
 xax_print = xax[-c(intron_start_ind:(intron_start_ind+iwidth-500))]
 labels = xax_print[c(1, pretty(1:length(covtmp_blue))[-1])]
@@ -698,7 +703,7 @@ axis(side=2, at=ymax/2, labels='Coverage', tick=FALSE, outer=FALSE, mgp=c(3,3,0)
 if(strand=='+'){
   text(x=3000, y=-(txind+1)*transcript_width, "transcription: 5' --> 3'")
 }else{
-  text(x=3000, y=-(txind+1)*transcript_width, "transcriptio: 3' <-- 5'")
+  text(x=3000, y=-(txind+1)*transcript_width, "transcription: 3' <-- 5'")
 }
 ```
 
