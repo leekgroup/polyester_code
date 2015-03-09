@@ -1,7 +1,7 @@
 code for Polyester paper
 ==============
 
-Reproduce our updated Polyester paper (available soon on BiorXiv) with the code/data in this repository! 
+Reproduce our updated Polyester paper (available [on BiorXiv](http://biorxiv.org/content/early/2014/12/12/006015)) with the code/data in this repository! 
 
 The document that I reproduced for you is at [this link](http://htmlpreview.github.io/?https://github.com/alyssafrazee/polyester_code/blob/master/polyester_manuscript.html). (That's just a rendered version of `polyester_manuscript.html`, which lives in this repo).
 
